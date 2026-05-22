@@ -26,3 +26,9 @@ spring:
     multipart:
       max-file-size: 10MB
       max-request-size: 10MB
+
+issueflow:
+  security:
+    jwt:
+      secret: "test-secret-key-test-secret-key-32chars"
+      expiration-seconds: 3600
