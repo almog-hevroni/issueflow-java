@@ -2,22 +2,19 @@ server:
   port: 8080
 
 spring:
+  profiles:
+    default: local
   application:
     name: issueflow
-  datasource:
-    url: jdbc:postgresql://localhost:5432/issueflow
-    username: issueflow
-    password: issueflow
-    driverClassName: org.postgresql.Driver
-    platform: postgres
+  config:
+    import: optional:classpath:application-local.yaml
   jpa:
     database: POSTGRESQL
     show-sql: true
     hibernate:
-      ddl-auto: update
-  sql:
-    init:
-      mode: always
+      ddl-auto: validate
+  flyway:
+    enabled: true
   servlet:
     multipart:
       max-file-size: 10MB
