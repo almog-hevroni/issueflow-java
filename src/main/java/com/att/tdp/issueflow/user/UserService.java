@@ -10,6 +10,7 @@ import com.att.tdp.issueflow.user.dto.UserResponse;
 import com.att.tdp.issueflow.user.entity.User;
 import com.att.tdp.issueflow.user.repository.UserRepository;
 import java.util.List;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -17,17 +18,23 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class UserService {
 
-	private static final String DEFAULT_PASSWORD = "Password123!";
 	private static final String ENTITY_TYPE = "USER";
 
 	private final UserRepository userRepository;
 	private final PasswordEncoder passwordEncoder;
 	private final AuditService auditService;
+	private final String initialPassword;
 
-	public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder, AuditService auditService) {
+	public UserService(
+			UserRepository userRepository,
+			PasswordEncoder passwordEncoder,
+			AuditService auditService,
+			@Value("${issueflow.security.initial-password:Password123!}") String initialPassword
+	) {
 		this.userRepository = userRepository;
 		this.passwordEncoder = passwordEncoder;
 		this.auditService = auditService;
+		this.initialPassword = initialPassword;
 	}
 
 	@Transactional(readOnly = true)
@@ -55,7 +62,11 @@ public class UserService {
 		user.setEmail(request.email());
 		user.setFullName(request.fullName());
 		user.setRole(request.role());
-		user.setPasswordHash(passwordEncoder.encode(DEFAULT_PASSWORD));
+		String rawPassword = request.password();
+		if (rawPassword == null || rawPassword.isBlank()) {
+			rawPassword = initialPassword;
+		}
+		user.setPasswordHash(passwordEncoder.encode(rawPassword));
 
 		User saved = userRepository.save(user);
 		auditService.recordUserAction(AuditAction.CREATE, ENTITY_TYPE, saved.getId(), "{\"source\":\"users-api\"}");

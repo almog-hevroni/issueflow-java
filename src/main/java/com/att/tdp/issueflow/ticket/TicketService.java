@@ -6,17 +6,21 @@ import com.att.tdp.issueflow.common.exception.BadRequestException;
 import com.att.tdp.issueflow.common.exception.ImmutableTicketException;
 import com.att.tdp.issueflow.common.exception.InvalidStateTransitionException;
 import com.att.tdp.issueflow.common.exception.NotFoundException;
+import com.att.tdp.issueflow.project.dto.ProjectWorkloadResponse;
 import com.att.tdp.issueflow.project.entity.Project;
 import com.att.tdp.issueflow.project.repository.ProjectRepository;
 import com.att.tdp.issueflow.ticket.dto.CreateTicketRequest;
 import com.att.tdp.issueflow.ticket.dto.TicketResponse;
 import com.att.tdp.issueflow.ticket.dto.UpdateTicketRequest;
+import com.att.tdp.issueflow.ticket.dependency.repository.TicketDependencyRepository;
 import com.att.tdp.issueflow.ticket.entity.Ticket;
 import com.att.tdp.issueflow.ticket.enums.TicketStatus;
 import com.att.tdp.issueflow.ticket.repository.TicketRepository;
 import com.att.tdp.issueflow.user.entity.User;
+import com.att.tdp.issueflow.user.enums.Role;
 import com.att.tdp.issueflow.user.repository.UserRepository;
 import java.time.Instant;
+import java.util.Comparator;
 import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,17 +31,20 @@ public class TicketService {
 	private static final String ENTITY_TYPE = "TICKET";
 
 	private final TicketRepository ticketRepository;
+	private final TicketDependencyRepository ticketDependencyRepository;
 	private final ProjectRepository projectRepository;
 	private final UserRepository userRepository;
 	private final AuditService auditService;
 
 	public TicketService(
 			TicketRepository ticketRepository,
+			TicketDependencyRepository ticketDependencyRepository,
 			ProjectRepository projectRepository,
 			UserRepository userRepository,
 			AuditService auditService
 	) {
 		this.ticketRepository = ticketRepository;
+		this.ticketDependencyRepository = ticketDependencyRepository;
 		this.projectRepository = projectRepository;
 		this.userRepository = userRepository;
 		this.auditService = auditService;
@@ -49,6 +56,16 @@ public class TicketService {
 			throw new NotFoundException("Project not found: " + projectId);
 		}
 		return ticketRepository.findAllByProject_IdAndDeletedAtIsNull(projectId).stream()
+				.map(this::toResponse)
+				.toList();
+	}
+
+	@Transactional(readOnly = true)
+	public List<TicketResponse> getDeletedTicketsByProject(Long projectId) {
+		if (!projectRepository.existsById(projectId)) {
+			throw new NotFoundException("Project not found: " + projectId);
+		}
+		return ticketRepository.findAllByProject_IdAndDeletedAtIsNotNull(projectId).stream()
 				.map(this::toResponse)
 				.toList();
 	}
@@ -72,10 +89,20 @@ public class TicketService {
 		ticket.setType(request.type());
 		ticket.setDueDate(request.dueDate());
 		ticket.setOverdue(false);
-		ticket.setAssignee(resolveAssignee(request.assigneeId()));
+		User assignee = request.assigneeId() != null
+				? resolveAssignee(request.assigneeId())
+				: selectAutoAssignee(project.getId());
+		ticket.setAssignee(assignee);
 
 		Ticket saved = ticketRepository.save(ticket);
 		auditService.recordUserAction(AuditAction.CREATE, ENTITY_TYPE, saved.getId(), "{\"source\":\"tickets-api\"}");
+		if (request.assigneeId() == null && assignee != null) {
+			auditService.recordSystemAction(
+					AuditAction.AUTO_ASSIGN,
+					ENTITY_TYPE,
+					saved.getId(),
+					"{\"source\":\"auto-assignment\",\"assigneeId\":%d}".formatted(assignee.getId()));
+		}
 		return toResponse(saved);
 	}
 
@@ -96,6 +123,7 @@ public class TicketService {
 		}
 		if (request.status() != null) {
 			validateStatusTransition(ticket.getStatus(), request.status());
+			validateDoneConstraints(ticket, request.status());
 			ticket.setStatus(request.status());
 		}
 		if (request.title() != null) {
@@ -125,6 +153,18 @@ public class TicketService {
 		auditService.recordUserAction(AuditAction.DELETE, ENTITY_TYPE, ticketId, "{\"source\":\"tickets-api\"}");
 	}
 
+	@Transactional
+	public void restoreTicket(Long ticketId) {
+		Ticket ticket = ticketRepository.findById(ticketId)
+				.orElseThrow(() -> new NotFoundException("Ticket not found: " + ticketId));
+		if (ticket.getDeletedAt() == null) {
+			throw new BadRequestException("Ticket is not deleted: " + ticketId);
+		}
+		ticket.setDeletedAt(null);
+		ticketRepository.save(ticket);
+		auditService.recordUserAction(AuditAction.RESTORE, ENTITY_TYPE, ticketId, "{\"source\":\"tickets-api\"}");
+	}
+
 	private Ticket findActiveTicket(Long ticketId) {
 		return ticketRepository.findByIdAndDeletedAtIsNull(ticketId)
 				.orElseThrow(() -> new NotFoundException("Ticket not found: " + ticketId));
@@ -138,6 +178,28 @@ public class TicketService {
 				.orElseThrow(() -> new NotFoundException("Assignee user not found: " + assigneeId));
 	}
 
+	private User selectAutoAssignee(Long projectId) {
+		return userRepository.findAllByRoleOrderByCreatedAtAsc(Role.DEVELOPER).stream()
+				.min((left, right) -> Long.compare(
+						ticketRepository.countOpenAssignedTickets(projectId, left.getId(), TicketStatus.DONE),
+						ticketRepository.countOpenAssignedTickets(projectId, right.getId(), TicketStatus.DONE)))
+				.orElse(null);
+	}
+
+	@Transactional(readOnly = true)
+	public List<ProjectWorkloadResponse> getWorkload(Long projectId) {
+		if (!projectRepository.existsByIdAndDeletedAtIsNull(projectId)) {
+			throw new NotFoundException("Project not found: " + projectId);
+		}
+		return userRepository.findAllByRoleOrderByCreatedAtAsc(Role.DEVELOPER).stream()
+				.map(user -> new ProjectWorkloadResponse(
+						user.getId(),
+						user.getUsername(),
+						ticketRepository.countOpenAssignedTickets(projectId, user.getId(), TicketStatus.DONE)))
+				.sorted(Comparator.comparingLong(ProjectWorkloadResponse::openTicketCount))
+				.toList();
+	}
+
 	private void validateStatusTransition(TicketStatus currentStatus, TicketStatus newStatus) {
 		if (currentStatus == newStatus) {
 			return;
@@ -149,6 +211,17 @@ public class TicketService {
 		if (newStatus.ordinal() - currentStatus.ordinal() > 1) {
 			throw new BadRequestException(
 					"Status transition must advance one step at a time from " + currentStatus + " to " + newStatus);
+		}
+	}
+
+	private void validateDoneConstraints(Ticket ticket, TicketStatus newStatus) {
+		if (newStatus != TicketStatus.DONE) {
+			return;
+		}
+		boolean hasUnresolvedBlockers = ticketDependencyRepository
+				.existsByTicket_IdAndBlockedByTicket_StatusNot(ticket.getId(), TicketStatus.DONE);
+		if (hasUnresolvedBlockers) {
+			throw new BadRequestException("Cannot set ticket to DONE while dependencies are unresolved");
 		}
 	}
 

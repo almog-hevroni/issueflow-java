@@ -25,13 +25,29 @@ public class AuditService {
 
 	@Transactional
 	public void recordUserAction(AuditAction action, String entityType, Long entityId, String detailsJson) {
+		recordAction(action, entityType, entityId, detailsJson, AuditActorType.USER, resolveActorUser());
+	}
+
+	@Transactional
+	public void recordSystemAction(AuditAction action, String entityType, Long entityId, String detailsJson) {
+		recordAction(action, entityType, entityId, detailsJson, AuditActorType.SYSTEM, null);
+	}
+
+	private void recordAction(
+			AuditAction action,
+			String entityType,
+			Long entityId,
+			String detailsJson,
+			AuditActorType actorType,
+			User actorUser
+	) {
 		AuditLog log = new AuditLog();
 		log.setAction(action);
 		log.setEntityType(entityType);
 		log.setEntityId(entityId);
 		log.setDetailsJson(detailsJson);
-		log.setActorType(AuditActorType.USER);
-		log.setActorUser(resolveActorUser());
+		log.setActorType(actorType);
+		log.setActorUser(actorUser);
 		auditLogRepository.save(log);
 	}
 

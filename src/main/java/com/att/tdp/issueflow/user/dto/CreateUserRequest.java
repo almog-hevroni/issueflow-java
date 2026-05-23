@@ -10,6 +10,8 @@ public record CreateUserRequest(
 		@NotBlank @Size(max = 100) String username,
 		@NotBlank @Email @Size(max = 255) String email,
 		@NotBlank @Size(max = 255) String fullName,
-		@NotNull Role role
+		@NotNull Role role,
+		@Size(min = 8, max = 255, message = "password must be between 8 and 255 characters")
+		String password
 ) {
 }

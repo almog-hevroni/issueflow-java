@@ -137,6 +137,49 @@ class CoreCrudIntegrationTest {
 	}
 
 	@Test
+	void createUserWithExplicitPasswordShouldAllowLoginWithThatPassword() throws Exception {
+		createUserDirect("admin", "admin@example.com", Role.ADMIN, "Password123!");
+		String token = obtainToken("admin", "Password123!");
+
+		mockMvc.perform(post("/users")
+						.header("Authorization", "Bearer " + token)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("""
+								{
+								  "username": "explicit-pass-user",
+								  "email": "explicit-pass-user@example.com",
+								  "fullName": "Explicit Password User",
+								  "role": "DEVELOPER",
+								  "password": "StrongPass123!"
+								}
+								"""))
+				.andExpect(status().isOk());
+
+		obtainToken("explicit-pass-user", "StrongPass123!");
+	}
+
+	@Test
+	void createUserWithoutPasswordShouldUseConfiguredInitialPasswordForLogin() throws Exception {
+		createUserDirect("admin", "admin@example.com", Role.ADMIN, "Password123!");
+		String token = obtainToken("admin", "Password123!");
+
+		mockMvc.perform(post("/users")
+						.header("Authorization", "Bearer " + token)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("""
+								{
+								  "username": "fallback-pass-user",
+								  "email": "fallback-pass-user@example.com",
+								  "fullName": "Fallback Password User",
+								  "role": "DEVELOPER"
+								}
+								"""))
+				.andExpect(status().isOk());
+
+		obtainToken("fallback-pass-user", "Password123!");
+	}
+
+	@Test
 	void projectTicketCommentFlowShouldEnforceRulesAndSoftDelete() throws Exception {
 		createUserDirect("admin", "admin2@example.com", Role.ADMIN, "Password123!");
 		createUserDirect("ownerUser", "owner@example.com", Role.DEVELOPER, "Password123!");

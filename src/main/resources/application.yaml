@@ -22,6 +22,7 @@ spring:
 
 issueflow:
   security:
+    initial-password: ${ISSUEFLOW_SECURITY_INITIAL_PASSWORD:Password123!}
     jwt:
       secret: ${ISSUEFLOW_SECURITY_JWT_SECRET:change-this-secret-in-production-at-least-32-chars}
       expiration-seconds: 3600

@@ -41,6 +41,11 @@ public class ProjectService {
 	}
 
 	@Transactional(readOnly = true)
+	public List<ProjectResponse> getDeletedProjects() {
+		return projectRepository.findAllByDeletedAtIsNotNull().stream().map(this::toResponse).toList();
+	}
+
+	@Transactional(readOnly = true)
 	public ProjectResponse getProjectById(Long projectId) {
 		Project project = findActiveProject(projectId);
 		return toResponse(project);
@@ -83,6 +88,18 @@ public class ProjectService {
 		project.setDeletedAt(Instant.now());
 		projectRepository.save(project);
 		auditService.recordUserAction(AuditAction.DELETE, ENTITY_TYPE, projectId, "{\"source\":\"projects-api\"}");
+	}
+
+	@Transactional
+	public void restoreProject(Long projectId) {
+		Project project = projectRepository.findById(projectId)
+				.orElseThrow(() -> new NotFoundException("Project not found: " + projectId));
+		if (project.getDeletedAt() == null) {
+			throw new BadRequestException("Project is not deleted: " + projectId);
+		}
+		project.setDeletedAt(null);
+		projectRepository.save(project);
+		auditService.recordUserAction(AuditAction.RESTORE, ENTITY_TYPE, projectId, "{\"source\":\"projects-api\"}");
 	}
 
 	private Project findActiveProject(Long projectId) {
