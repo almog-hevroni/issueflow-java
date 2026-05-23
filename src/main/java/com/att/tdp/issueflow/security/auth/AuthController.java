@@ -3,6 +3,7 @@ package com.att.tdp.issueflow.security.auth;
 import com.att.tdp.issueflow.security.auth.dto.AuthMeResponse;
 import com.att.tdp.issueflow.security.auth.dto.LoginRequest;
 import com.att.tdp.issueflow.security.auth.dto.LoginResponse;
+import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -25,6 +26,7 @@ public class AuthController {
 	}
 
 	@PostMapping("/login")
+	@SecurityRequirements
 	public ResponseEntity<LoginResponse> login(@Valid @RequestBody LoginRequest request) {
 		LoginResponse response = authService.login(request.username(), request.password());
 		return ResponseEntity.ok(response);

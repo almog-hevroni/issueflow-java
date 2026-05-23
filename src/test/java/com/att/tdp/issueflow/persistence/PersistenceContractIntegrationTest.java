@@ -1,5 +1,7 @@
 package com.att.tdp.issueflow.persistence;
 
+import com.att.tdp.issueflow.attachment.repository.AttachmentRepository;
+import com.att.tdp.issueflow.audit.repository.AuditLogRepository;
 import com.att.tdp.issueflow.comment.entity.Comment;
 import com.att.tdp.issueflow.comment.entity.CommentMention;
 import com.att.tdp.issueflow.comment.entity.CommentMentionId;
@@ -15,12 +17,14 @@ import com.att.tdp.issueflow.ticket.enums.TicketPriority;
 import com.att.tdp.issueflow.ticket.enums.TicketStatus;
 import com.att.tdp.issueflow.ticket.enums.TicketType;
 import com.att.tdp.issueflow.ticket.repository.TicketRepository;
+import com.att.tdp.issueflow.security.auth.repository.RevokedTokenRepository;
 import com.att.tdp.issueflow.user.entity.User;
 import com.att.tdp.issueflow.user.enums.Role;
 import com.att.tdp.issueflow.user.repository.UserRepository;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -57,6 +61,28 @@ class PersistenceContractIntegrationTest {
 
 	@Autowired
 	private PlatformTransactionManager transactionManager;
+
+	@Autowired
+	private AttachmentRepository attachmentRepository;
+
+	@Autowired
+	private AuditLogRepository auditLogRepository;
+
+	@Autowired
+	private RevokedTokenRepository revokedTokenRepository;
+
+	@BeforeEach
+	void setup() {
+		auditLogRepository.deleteAll();
+		commentMentionRepository.deleteAll();
+		commentRepository.deleteAll();
+		ticketDependencyRepository.deleteAll();
+		attachmentRepository.deleteAll();
+		ticketRepository.deleteAll();
+		projectRepository.deleteAll();
+		revokedTokenRepository.deleteAll();
+		userRepository.deleteAll();
+	}
 
 	@Test
 	void flywaySchemaAndCorePersistenceShouldWork() {

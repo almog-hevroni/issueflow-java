@@ -12,4 +12,6 @@ public interface ProjectRepository extends JpaRepository<Project, Long> {
 	List<Project> findAllByDeletedAtIsNull();
 
 	List<Project> findAllByDeletedAtIsNotNull();
+
+	boolean existsByIdAndDeletedAtIsNull(Long id);
 }

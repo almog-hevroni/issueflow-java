@@ -1,0 +1,726 @@
+IssueFlow - Current Swagger Manual Test Guide
+File purpose: document only tests that can be executed RIGHT NOW from implemented code.
+Last updated: current codebase state (controllers under /auth, /users, /projects, /tickets, /tickets/{ticketId}/comments)
+
+====================================================================
+1) Environment setup
+====================================================================
+
+1.1 Start database (PostgreSQL)
+- Option A (recommended from project): use compose.yml
+  Command:
+    docker compose up -d db
+
+- Option B: local PostgreSQL service
+  Must match application-local.yaml:
+    host: localhost
+    port: 5432
+    database: issueflow
+    username: issueflow
+    password: issueflow
+
+1.2 Start Spring Boot app
+- From project root:
+    ./mvnw spring-boot:run -Dspring-boot.run.profiles=local
+
+1.3 Confirm app is up
+- Open Swagger UI:
+    http://localhost:8080/swagger-ui/index.html
+
+====================================================================
+2) Important precondition for login
+====================================================================
+
+Current code has NO automatic seeded user.
+If login fails because no user exists, create one local bootstrap user in DB.
+
+2.1 Bootstrap local user (development only)
+Run in PostgreSQL query tool:
+
+  CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+  INSERT INTO users (username, email, full_name, role, password_hash)
+  VALUES (
+    'swagger_admin_local',
+    'swagger_admin_local@example.com',
+    'Swagger Local Admin',
+    'ADMIN',
+    crypt('Password123!', gen_salt('bf'))
+  )
+  ON CONFLICT (username) DO NOTHING;
+
+2.2 Verify bootstrap user exists
+
+  SELECT id, username, role
+  FROM users
+  WHERE username = 'swagger_admin_local';
+
+Save returned id as:
+  <ADMIN_ID>
+
+====================================================================
+3) Swagger auth usage (JWT)
+====================================================================
+
+3.1 Login to obtain token
+- Endpoint: POST /auth/login
+- After success, copy:
+  <ACCESS_TOKEN> = response.accessToken
+
+3.2 Authorize in Swagger
+- Click "Authorize" (top right lock button).
+- Enter token in the JWT field.
+  If Swagger expects raw token: paste <ACCESS_TOKEN>.
+  If Swagger expects full value: paste Bearer <ACCESS_TOKEN>.
+
+3.3 Common auth requirement
+- Only POST /auth/login is public.
+- All other business endpoints require JWT.
+
+====================================================================
+4) Correct test execution order
+====================================================================
+
+Recommended order:
+  A. Swagger/UI smoke checks
+  B. Authentication flow checks
+  C. Authorization/JWT negative checks
+  D. User API checks
+  E. Project API checks
+  F. Ticket API checks
+  G. Comment API checks
+  H. Logout + revoked token checks
+  I. Database verification checklist
+
+IDs/tokens to collect while testing:
+  <ACCESS_TOKEN>
+  <ADMIN_ID>
+  <DEV_ID>
+  <PROJECT_ID>
+  <TICKET_ID>
+  <COMMENT_ID>
+
+====================================================================
+5) Swagger/UI smoke checks
+====================================================================
+
+Test S1 - Swagger loads successfully
+- Purpose: verify docs endpoint is reachable.
+- Method/Path: GET /swagger-ui/index.html (browser)
+- Auth: No
+- Expected: page loads and endpoints are visible.
+
+Test S2 - OpenAPI docs endpoint available
+- Purpose: verify OpenAPI JSON is generated.
+- Method/Path: GET /v3/api-docs (browser)
+- Auth: No
+- Expected status: 200
+- Verify: JSON includes paths for /auth, /users, /projects, /tickets, /tickets/{ticketId}/comments.
+
+====================================================================
+6) Authentication flow tests
+====================================================================
+
+Test A1 - Login with valid credentials
+- Purpose: get JWT token.
+- Method: POST
+- Path: /auth/login
+- Authorization required: No
+- Headers: Content-Type: application/json
+- Request body:
+  {
+    "username": "swagger_admin_local",
+    "password": "Password123!"
+  }
+- Expected status: 200
+- Expected success response:
+  {
+    "accessToken": "<jwt>",
+    "tokenType": "Bearer",
+    "expiresIn": 3600
+  }
+- Verify in response:
+  - accessToken is non-empty string
+  - tokenType = "Bearer"
+  - expiresIn > 0
+- Copy:
+  <ACCESS_TOKEN>
+- DB verify:
+  - no new row required for login itself.
+
+Test A2 - Login with invalid username
+- Purpose: negative auth check.
+- Method/Path: POST /auth/login
+- Request body:
+  {
+    "username": "not_exists_user",
+    "password": "Password123!"
+  }
+- Expected status: 401
+- Verify: authentication error (bad credentials/unauthorized).
+
+Test A3 - Login with invalid password
+- Purpose: negative auth check.
+- Method/Path: POST /auth/login
+- Request body:
+  {
+    "username": "swagger_admin_local",
+    "password": "WrongPassword!"
+  }
+- Expected status: 401
+
+Test A4 - Login with missing required field
+- Purpose: validation check.
+- Method/Path: POST /auth/login
+- Request body:
+  {
+    "username": "swagger_admin_local",
+    "password": ""
+  }
+- Expected status: 400
+- Verify: validation message indicates password is required/not blank.
+
+Test A5 - Get current user after login
+- Purpose: verify token-based identity endpoint.
+- Method: GET
+- Path: /auth/me
+- Authorization required: Yes
+- Required headers:
+  Authorization: Bearer <ACCESS_TOKEN> (via Authorize button)
+- Request body: none
+- Expected status: 200
+- Verify in response:
+  - id equals bootstrap/admin user id
+  - username/email/fullName/role are present
+
+Test A6 - Access /auth/me without token
+- Purpose: protected endpoint check.
+- Method/Path: GET /auth/me
+- Authorization required: intentionally NOT provided
+- Expected status: 401
+
+====================================================================
+7) Authorization/JWT behavior tests
+====================================================================
+
+Test J1 - Access protected endpoint without token
+- Purpose: security baseline.
+- Method/Path: GET /users
+- Expected status: 401
+
+Test J2 - Access protected endpoint with malformed token
+- Purpose: invalid token handling.
+- Method/Path: GET /users
+- Header:
+  Authorization: Bearer not-a-real-jwt
+- Expected status: 401
+
+Test J3 - Access protected endpoint with valid token
+- Purpose: successful authorization.
+- Method/Path: GET /users
+- Header:
+  Authorization: Bearer <ACCESS_TOKEN>
+- Expected status: 200
+
+====================================================================
+8) User API tests (implemented)
+====================================================================
+
+Test U1 - Get all users
+- Purpose: list users.
+- Method/Path: GET /users
+- Auth: Yes
+- Headers: Authorization Bearer token
+- Body: none
+- Expected status: 200
+- Verify response: array with user objects.
+- DB verify: should match rows in users table (not including deleted rows if physically removed).
+
+Test U2 - Create user (DEVELOPER)
+- Purpose: create assignable/comment author user.
+- Method/Path: POST /users
+- Auth: Yes
+- Headers:
+  Authorization: Bearer <ACCESS_TOKEN>
+  Content-Type: application/json
+- Request body:
+  {
+    "username": "dev_swagger_01",
+    "email": "dev_swagger_01@example.com",
+    "fullName": "Developer Swagger One",
+    "role": "DEVELOPER"
+  }
+- Expected status: 200
+- Verify response: id returned, fields match request.
+- Copy:
+  <DEV_ID> = created id
+- DB verify:
+  - users row inserted
+  - password_hash created (default app password is Password123! for users created through API)
+
+Test U3 - Create user duplicate username/email
+- Purpose: conflict handling.
+- Method/Path: POST /users
+- Body (same as U2):
+  {
+    "username": "dev_swagger_01",
+    "email": "dev_swagger_01@example.com",
+    "fullName": "Duplicate User",
+    "role": "DEVELOPER"
+  }
+- Expected status: 409
+
+Test U4 - Create user invalid role
+- Purpose: enum validation/deserialization.
+- Method/Path: POST /users
+- Body:
+  {
+    "username": "dev_swagger_bad_role",
+    "email": "dev_swagger_bad_role@example.com",
+    "fullName": "Bad Role User",
+    "role": ""
+  }
+- Expected status: 400
+- Verify response message:
+  Invalid request body: role must be one of [ADMIN, DEVELOPER]
+
+Test U5 - Get user by id
+- Purpose: read single user.
+- Method/Path: GET /users/{userId}
+- Path example: /users/<DEV_ID>
+- Auth: Yes
+- Expected status: 200
+- Verify response.id = <DEV_ID>
+
+Test U6 - Get user by non-existing id
+- Method/Path: GET /users/999999
+- Expected status: 404
+
+Test U7 - Update user valid data
+- Purpose: modify fullName and role.
+- Method/Path: POST /users/update/{userId}
+- Path example: /users/update/<DEV_ID>
+- Auth: Yes
+- Headers: Authorization + Content-Type
+- Body:
+  {
+    "fullName": "Developer Swagger One Updated",
+    "role": "DEVELOPER"
+  }
+- Expected status: 200
+- Verify via GET /users/{userId}: fullName changed.
+- DB verify: users.full_name updated.
+
+Test U8 - Update user with blank fullName
+- Body:
+  {
+    "fullName": "",
+    "role": "DEVELOPER"
+  }
+- Expected status: 400
+
+Test U9 - Update user with empty role
+- Body:
+  {
+    "fullName": "Developer Swagger One Updated Again",
+    "role": ""
+  }
+- Expected status: 400
+- Verify response message normalized for role enum.
+
+Test U10 - Delete user
+- Method/Path: DELETE /users/{userId}
+- Path example: /users/<DEV_ID>
+- Expected status: 200
+- Verify:
+  - GET /users/{userId} returns 404
+  - row removed from users table (hard delete)
+- Note:
+  If user is referenced by project/ticket/comment FK, deletion may fail with 409.
+
+====================================================================
+9) Project API tests (implemented)
+====================================================================
+
+Precondition:
+- Need an existing owner user id (recommend create a DEVELOPER user first and keep it).
+
+Test P1 - Create project
+- Method/Path: POST /projects
+- Auth: Yes
+- Headers: Authorization + Content-Type
+- Body:
+  {
+    "name": "Swagger Project 01",
+    "description": "Project for manual Swagger tests",
+    "ownerId": <ADMIN_ID>
+  }
+- Expected status: 200
+- Verify response has id.
+- Copy:
+  <PROJECT_ID> = created id
+- DB verify:
+  - projects row inserted with deleted_at null.
+
+Test P2 - Create project with invalid ownerId
+- Body:
+  {
+    "name": "Bad Project",
+    "description": "Invalid owner test",
+    "ownerId": 999999
+  }
+- Expected status: 404
+
+Test P3 - Get all projects
+- Method/Path: GET /projects
+- Expected status: 200
+- Verify includes active projects only (deleted_at is null).
+
+Test P4 - Get project by id
+- Method/Path: GET /projects/{projectId}
+- Path example: /projects/<PROJECT_ID>
+- Expected status: 200
+
+Test P5 - Update project (partial)
+- Method/Path: PATCH /projects/{projectId}
+- Body:
+  {
+    "name": "Swagger Project 01 Updated",
+    "description": "Updated description"
+  }
+- Expected status: 200
+- Verify via GET by id.
+
+Test P6 - Update project with empty payload (no updatable fields)
+- Body:
+  {}
+- Expected status: 400
+
+Test P7 - Delete project (soft delete)
+- Method/Path: DELETE /projects/{projectId}
+- Expected status: 200
+- Verify:
+  - GET /projects/{projectId} -> 404
+  - GET /projects does not show it
+  - DB row still exists with deleted_at populated
+
+====================================================================
+10) Ticket API tests (implemented)
+====================================================================
+
+Precondition:
+- Need active <PROJECT_ID>.
+- Optional assignee user id <DEV_ID>.
+
+Test T1 - Create ticket (with dueDate)
+- Method/Path: POST /tickets
+- Auth: Yes
+- Body:
+  {
+    "title": "Swagger Ticket 01",
+    "description": "Ticket created from Swagger test",
+    "status": "TODO",
+    "priority": "HIGH",
+    "type": "BUG",
+    "projectId": <PROJECT_ID>,
+    "assigneeId": <ADMIN_ID>,
+    "dueDate": "2026-12-31T12:00:00Z"
+  }
+- Expected status: 200
+- Verify response contains id, dueDate, isOverdue=false.
+- Copy:
+  <TICKET_ID> = created id
+- DB verify:
+  - tickets row inserted with deleted_at null.
+
+Test T2 - Create ticket without dueDate
+- Body:
+  {
+    "title": "Swagger Ticket No Due Date",
+    "description": "Due date optional test",
+    "status": "TODO",
+    "priority": "MEDIUM",
+    "type": "FEATURE",
+    "projectId": <PROJECT_ID>,
+    "assigneeId": <ADMIN_ID>
+  }
+- Expected status: 200
+- Verify response dueDate = null (expected by current implementation).
+
+Test T3 - Create ticket with invalid projectId
+- Body:
+  {
+    "title": "Bad Ticket",
+    "description": "Invalid project",
+    "status": "TODO",
+    "priority": "LOW",
+    "type": "BUG",
+    "projectId": 999999
+  }
+- Expected status: 404
+
+Test T4 - Create ticket with invalid enum value
+- Body:
+  {
+    "title": "Bad Enum Ticket",
+    "description": "Invalid status",
+    "status": "",
+    "priority": "LOW",
+    "type": "BUG",
+    "projectId": <PROJECT_ID>
+  }
+- Expected status: 400
+
+Test T5 - Get tickets by project
+- Method/Path: GET /tickets?projectId=<PROJECT_ID>
+- Expected status: 200
+- Verify created tickets are listed.
+
+Test T6 - Get ticket by id
+- Method/Path: GET /tickets/{ticketId}
+- Path example: /tickets/<TICKET_ID>
+- Expected status: 200
+
+Test T7 - Valid status forward transition
+- Method/Path: PATCH /tickets/{ticketId}
+- Body:
+  {
+    "status": "IN_PROGRESS"
+  }
+- Expected status: 200
+- Verify via GET ticket: status updated.
+
+Test T8 - Invalid status jump (TODO -> DONE directly)
+- Create new TODO ticket first if needed.
+- Method/Path: PATCH /tickets/{ticketId}
+- Body:
+  {
+    "status": "DONE"
+  }
+- Expected status: 400
+
+Test T9 - Invalid backward transition
+- Put ticket to IN_REVIEW, then patch to TODO.
+- Expected status: 400
+
+Test T10 - Update DONE ticket forbidden
+- Move ticket to DONE with valid sequence:
+  TODO -> IN_PROGRESS -> IN_REVIEW -> DONE
+- Then PATCH title/priority.
+- Expected status: 400 (DONE tickets cannot be updated)
+
+Test T11 - Delete ticket (soft delete)
+- Method/Path: DELETE /tickets/{ticketId}
+- Expected status: 200
+- Verify:
+  - GET /tickets/{ticketId} -> 404
+  - GET /tickets?projectId=... does not show it
+  - DB row remains with deleted_at set
+
+====================================================================
+11) Comment API tests (implemented)
+====================================================================
+
+Precondition:
+- Need active <TICKET_ID>
+- Need existing author user id (e.g., <ADMIN_ID> or <DEV_ID>)
+
+Test C1 - Add comment
+- Method/Path: POST /tickets/{ticketId}/comments
+- Path example: /tickets/<TICKET_ID>/comments
+- Auth: Yes
+- Body:
+  {
+    "authorId": <ADMIN_ID>,
+    "content": "Initial comment from Swagger"
+  }
+- Expected status: 200
+- Verify response includes id, ticketId, authorId.
+- Copy:
+  <COMMENT_ID> = response.id
+- DB verify:
+  - comments row inserted.
+
+Test C2 - Add comment with @mention
+- Body:
+  {
+    "authorId": <ADMIN_ID>,
+    "content": "Hello @swagger_admin_local"
+  }
+- Expected status: 200
+- Verify mentionedUsers includes swagger_admin_local.
+- DB verify:
+  - comment_mentions row inserted for that comment/user.
+
+Test C3 - Add comment with unknown mention username
+- Body:
+  {
+    "authorId": <ADMIN_ID>,
+    "content": "Hello @user_does_not_exist_999"
+  }
+- Expected status: 200
+- Verify mentionedUsers is empty.
+
+Test C4 - Get comments for ticket
+- Method/Path: GET /tickets/{ticketId}/comments
+- Expected status: 200
+- Verify comments list is returned (newest first).
+
+Test C5 - Update comment content
+- Method/Path: PATCH /tickets/{ticketId}/comments/{commentId}
+- Body:
+  {
+    "content": "Updated comment content"
+  }
+- Expected status: 200
+- Verify via GET comments: content changed.
+
+Test C6 - Update comment mention recalculation
+- Body:
+  {
+    "content": "Now mentioning @swagger_admin_local again"
+  }
+- Expected status: 200
+- Verify mentionedUsers reflects current content only.
+
+Test C7 - Delete comment
+- Method/Path: DELETE /tickets/{ticketId}/comments/{commentId}
+- Expected status: 200
+- Verify:
+  - comment not returned by GET comments
+  - comment_mentions for that comment removed
+
+====================================================================
+12) Additional negative/error tests
+====================================================================
+
+N1 - Protected endpoints without token
+- Try:
+  GET /users
+  GET /projects
+  GET /tickets?projectId=<PROJECT_ID>
+- Expected: 401
+
+N2 - Missing Authorization header where required manually
+- POST /auth/logout without header
+- Expected: 401 or bad request behavior depending on request build.
+
+N3 - Malformed Authorization header on logout
+- POST /auth/logout with:
+  Authorization: Token <ACCESS_TOKEN>
+- Expected: 400
+- Verify message:
+  Authorization header must be Bearer token
+
+N4 - Reuse logged-out token
+- Steps:
+  1) login and copy token
+  2) logout with token
+  3) call GET /auth/me with same token
+- Expected: 401
+- DB verify:
+  revoked_tokens has row for token jti.
+
+====================================================================
+13) Logout and token revocation tests
+====================================================================
+
+Test L1 - Logout with valid token
+- Method/Path: POST /auth/logout
+- Auth: Yes
+- Headers:
+  Authorization: Bearer <ACCESS_TOKEN>
+- Body: none
+- Expected status: 200
+- DB verify:
+  - new row in revoked_tokens
+
+Test L2 - Validate revoked token cannot be used
+- Method/Path: GET /auth/me (or GET /users)
+- Header:
+  Authorization: Bearer <same old token>
+- Expected status: 401
+
+Test L3 - Login again after logout
+- POST /auth/login with same credentials
+- Expected status: 200
+- Verify:
+  new token is issued (different from previous token).
+
+====================================================================
+14) Database verification checklist
+====================================================================
+
+Use SQL during/after tests:
+
+Users:
+  SELECT id, username, email, role FROM users ORDER BY id DESC;
+
+Projects:
+  SELECT id, name, owner_id, deleted_at FROM projects ORDER BY id DESC;
+
+Tickets:
+  SELECT id, project_id, status, priority, due_date, is_overdue, deleted_at
+  FROM tickets ORDER BY id DESC;
+
+Comments:
+  SELECT id, ticket_id, author_id, content, created_at FROM comments ORDER BY id DESC;
+
+Comment mentions:
+  SELECT comment_id, mentioned_user_id, created_at
+  FROM comment_mentions ORDER BY created_at DESC;
+
+Audit logs (state-changing actions):
+  SELECT id, action, entity_type, entity_id, actor_type, actor_user_id, created_at
+  FROM audit_logs ORDER BY id DESC;
+
+Revoked tokens:
+  SELECT id, jti, expires_at, revoked_at FROM revoked_tokens ORDER BY id DESC;
+
+What to verify:
+- create/update/delete actions create expected DB changes
+- soft deletes set deleted_at (projects, tickets)
+- logout inserts revoke record
+- comment mention rows are synchronized with updated content
+
+====================================================================
+15) Not implemented yet (README endpoints/features not executable now)
+====================================================================
+
+These appear in README/requirements but are NOT currently implemented as controllers/endpoints:
+
+- GET /audit-logs
+- POST /tickets/{ticketId}/dependencies
+- GET /tickets/{ticketId}/dependencies
+- DELETE /tickets/{ticketId}/dependencies/{blockerId}
+- POST /tickets/{ticketId}/attachments
+- DELETE /tickets/{ticketId}/attachments/{attachmentId}
+- GET /tickets/export?projectId=:projectId
+- POST /tickets/import
+- GET /tickets/deleted?projectId=:projectId
+- POST /tickets/{ticketId}/restore
+- GET /projects/deleted
+- POST /projects/{projectId}/restore
+- GET /users/{userId}/mentions
+- GET /projects/{projectId}/workload
+
+Behavior/features in requirements that are not currently exposed/complete for manual Swagger execution:
+- Automatic overdue escalation scheduler behavior
+- Auto assignment to least-loaded developer on create when assigneeId is missing
+
+====================================================================
+16) Quick one-pass flow (minimal regression run)
+====================================================================
+
+1) Login success -> copy token
+2) /auth/me success
+3) /users create + get + update + conflict check
+4) /projects create + get + patch
+5) /tickets create + get + forward status transitions + invalid transition checks
+6) /comments create + mention + update + delete
+7) /tickets delete (soft)
+8) /projects delete (soft)
+9) /auth/logout
+10) reuse old token -> 401
+
+End of file.
