@@ -26,3 +26,8 @@ issueflow:
     jwt:
       secret: ${ISSUEFLOW_SECURITY_JWT_SECRET:change-this-secret-in-production-at-least-32-chars}
       expiration-seconds: 3600
+  ticket:
+    escalation:
+      enabled: true
+      fixed-delay-ms: 60000
+      batch-size: 100

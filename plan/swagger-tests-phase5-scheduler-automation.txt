@@ -1,0 +1,738 @@
+IssueFlow - Phase 5 Swagger + Manual/Semi-Manual Test Guide
+Phase: Scheduler + System Automation
+Generated from current implemented code only.
+
+========================================================================
+1) Purpose of Phase 5 tests
+========================================================================
+
+Phase 5 in this codebase is focused on automated/background behavior for tickets.
+
+What "Scheduler + System Automation" means in the current implementation:
+
+1. Automatic overdue escalation scheduler
+   - A background scheduler runs periodically.
+   - It scans overdue active tickets and escalates priority by one level:
+     LOW -> MEDIUM -> HIGH -> CRITICAL.
+   - If a ticket is already CRITICAL and still overdue, it sets is_overdue=true.
+   - It does not change status.
+
+2. Reset behavior after manual priority update
+   - If user manually updates ticket priority via PATCH /tickets/{ticketId},
+     is_overdue is reset to false immediately.
+
+3. Automatic/system audit logging
+   - Scheduler writes audit logs with:
+     action = AUTO_ESCALATE
+     actor_type = SYSTEM
+   - Existing auto-assignment behavior (implemented in TicketService.createTicket)
+     writes:
+     action = AUTO_ASSIGN
+     actor_type = SYSTEM
+
+Important implementation facts from current code:
+- Scheduler exists: TicketEscalationScheduler
+- Scheduling is enabled: @EnableScheduling in IssueFlowApplication
+- No dedicated API endpoint exists to trigger scheduler directly from Swagger.
+  Scheduler runs in background by configured interval only.
+
+========================================================================
+2) Environment setup
+========================================================================
+
+2.1 Start PostgreSQL
+- From project root:
+  docker compose up -d db
+
+- DB connection used by local profile:
+  host: localhost
+  port: 5432
+  database: issueflow
+  username: issueflow
+  password: issueflow
+
+2.2 Start Spring Boot with local profile
+- From project root:
+  ./mvnw spring-boot:run -Dspring-boot.run.profiles=local
+
+2.3 Verify app + Swagger
+- Swagger UI:
+  http://localhost:8080/swagger-ui/index.html
+- OpenAPI:
+  http://localhost:8080/v3/api-docs
+- Health:
+  http://localhost:8080/actuator/health
+
+2.4 Login and authorize with JWT
+- Use POST /auth/login
+- Copy response.accessToken to:
+  <ACCESS_TOKEN>
+- Click Authorize in Swagger:
+  Bearer <ACCESS_TOKEN>
+
+2.5 Reuse previous data
+- You can reuse data and setup steps from:
+  plan/swagger-tests-phase0-4.txt
+- Especially useful for users/projects/tickets baseline data.
+
+========================================================================
+3) Required test data setup (Phase 5 baseline)
+========================================================================
+
+This section gives concrete setup so all Phase 5 tests can run.
+
+Track these placeholders:
+<ACCESS_TOKEN>
+<ADMIN_ID>
+<DEV1_ID>
+<DEV2_ID>
+<PROJECT_ID>
+<TICKET_LOW_ID>
+<TICKET_MEDIUM_ID>
+<TICKET_HIGH_ID>
+<TICKET_CRITICAL_ID>
+<TICKET_FUTURE_ID>
+<TICKET_NULL_DUE_ID>
+<TICKET_DONE_ID>
+<TICKET_DELETED_ID>
+
+3.1 Bootstrap ADMIN user (if not exists) directly in DB
+Reason: /auth/login is open, but /users creation is protected; first user is usually bootstrapped.
+
+SQL:
+  CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+  INSERT INTO users (username, email, full_name, role, password_hash)
+  VALUES (
+    'phase5_admin_local',
+    'phase5_admin_local@example.com',
+    'Phase5 Local Admin',
+    'ADMIN',
+    crypt('Password123!', gen_salt('bf'))
+  )
+  ON CONFLICT (username) DO NOTHING;
+
+Verify:
+  SELECT id, username, role FROM users WHERE username='phase5_admin_local';
+
+Save id as:
+  <ADMIN_ID>
+
+3.2 Login as admin
+Endpoint: POST /auth/login
+Body:
+  {
+    "username": "phase5_admin_local",
+    "password": "Password123!"
+  }
+Expected: 200, accessToken returned.
+Save:
+  <ACCESS_TOKEN>
+
+3.3 Create DEVELOPER users
+Endpoint: POST /users
+
+Body (DEV1):
+  {
+    "username": "phase5_dev_01",
+    "email": "phase5_dev_01@example.com",
+    "fullName": "Phase5 Developer One",
+    "role": "DEVELOPER",
+    "password": "Phase5Dev01!"
+  }
+
+Body (DEV2):
+  {
+    "username": "phase5_dev_02",
+    "email": "phase5_dev_02@example.com",
+    "fullName": "Phase5 Developer Two",
+    "role": "DEVELOPER",
+    "password": "Phase5Dev02!"
+  }
+
+Expected: 200 for each.
+Save IDs:
+  <DEV1_ID>, <DEV2_ID>
+
+3.4 Create project
+Endpoint: POST /projects
+Body:
+  {
+    "name": "Phase5 Scheduler Project",
+    "description": "Project for scheduler and automation tests",
+    "ownerId": <DEV1_ID>
+  }
+
+Expected: 200
+Save:
+  <PROJECT_ID>
+
+3.5 Create core Phase 5 ticket set
+
+Use POST /tickets for all examples below.
+Current DTO fields required:
+title, status, priority, type, projectId
+Optional:
+description, assigneeId, dueDate
+
+Past due date sample:
+  "2020-01-01T00:00:00Z"
+Future due date sample:
+  "2099-01-01T00:00:00Z"
+
+LOW overdue ticket:
+  {
+    "title": "P5 LOW overdue",
+    "description": "should escalate to MEDIUM",
+    "status": "TODO",
+    "priority": "LOW",
+    "type": "BUG",
+    "projectId": <PROJECT_ID>,
+    "assigneeId": <DEV1_ID>,
+    "dueDate": "2020-01-01T00:00:00Z"
+  }
+Save as <TICKET_LOW_ID>
+
+MEDIUM overdue ticket:
+  {
+    "title": "P5 MEDIUM overdue",
+    "description": "should escalate to HIGH",
+    "status": "IN_PROGRESS",
+    "priority": "MEDIUM",
+    "type": "FEATURE",
+    "projectId": <PROJECT_ID>,
+    "assigneeId": <DEV1_ID>,
+    "dueDate": "2020-01-01T00:00:00Z"
+  }
+Save as <TICKET_MEDIUM_ID>
+
+HIGH overdue ticket:
+  {
+    "title": "P5 HIGH overdue",
+    "description": "should escalate to CRITICAL",
+    "status": "IN_REVIEW",
+    "priority": "HIGH",
+    "type": "TECHNICAL",
+    "projectId": <PROJECT_ID>,
+    "assigneeId": <DEV2_ID>,
+    "dueDate": "2020-01-01T00:00:00Z"
+  }
+Save as <TICKET_HIGH_ID>
+
+CRITICAL overdue ticket:
+  {
+    "title": "P5 CRITICAL overdue",
+    "description": "should remain CRITICAL and become overdue flag true",
+    "status": "IN_PROGRESS",
+    "priority": "CRITICAL",
+    "type": "BUG",
+    "projectId": <PROJECT_ID>,
+    "assigneeId": <DEV2_ID>,
+    "dueDate": "2020-01-01T00:00:00Z"
+  }
+Save as <TICKET_CRITICAL_ID>
+
+Future due ticket (should not change):
+  {
+    "title": "P5 future due",
+    "description": "must not escalate",
+    "status": "TODO",
+    "priority": "LOW",
+    "type": "BUG",
+    "projectId": <PROJECT_ID>,
+    "assigneeId": <DEV1_ID>,
+    "dueDate": "2099-01-01T00:00:00Z"
+  }
+Save as <TICKET_FUTURE_ID>
+
+Null dueDate ticket (should not change):
+  {
+    "title": "P5 null due",
+    "description": "must not escalate",
+    "status": "TODO",
+    "priority": "MEDIUM",
+    "type": "FEATURE",
+    "projectId": <PROJECT_ID>,
+    "assigneeId": <DEV1_ID>
+  }
+Save as <TICKET_NULL_DUE_ID>
+
+DONE overdue ticket (must not change):
+  {
+    "title": "P5 DONE overdue",
+    "description": "done tickets excluded from scheduler",
+    "status": "DONE",
+    "priority": "LOW",
+    "type": "BUG",
+    "projectId": <PROJECT_ID>,
+    "assigneeId": <DEV2_ID>,
+    "dueDate": "2020-01-01T00:00:00Z"
+  }
+Save as <TICKET_DONE_ID>
+
+Soft-delete candidate (create now, then DELETE it):
+  {
+    "title": "P5 deleted overdue",
+    "description": "soft-deleted ticket should not escalate",
+    "status": "TODO",
+    "priority": "LOW",
+    "type": "TECHNICAL",
+    "projectId": <PROJECT_ID>,
+    "assigneeId": <DEV2_ID>,
+    "dueDate": "2020-01-01T00:00:00Z"
+  }
+Save as <TICKET_DELETED_ID>
+
+Then call:
+  DELETE /tickets/<TICKET_DELETED_ID>
+Expected: 200
+
+========================================================================
+4) Scheduler behavior tests (full flow)
+========================================================================
+
+Because there is NO manual trigger endpoint for scheduler in current code,
+these tests are semi-manual:
+1) prepare data through Swagger
+2) wait for scheduler interval
+3) verify by Swagger GET and SQL
+
+Configured scheduler interval:
+- issueflow.ticket.escalation.fixed-delay-ms = 60000 (60 seconds)
+
+Recommended wait:
+- 70-90 seconds after setup to ensure at least one cycle executed.
+
+Common SQL verification query:
+  SELECT id, title, status, priority, due_date, is_overdue, assignee_id, deleted_at
+  FROM tickets
+  WHERE id IN (
+    <TICKET_LOW_ID>, <TICKET_MEDIUM_ID>, <TICKET_HIGH_ID>, <TICKET_CRITICAL_ID>,
+    <TICKET_FUTURE_ID>, <TICKET_NULL_DUE_ID>, <TICKET_DONE_ID>, <TICKET_DELETED_ID>
+  )
+  ORDER BY id;
+
+Common audit verification query:
+  SELECT id, action, entity_type, entity_id, actor_type, actor_user_id, details_json, created_at
+  FROM audit_logs
+  WHERE entity_type='TICKET'
+    AND entity_id IN (<TICKET_LOW_ID>, <TICKET_MEDIUM_ID>, <TICKET_HIGH_ID>, <TICKET_CRITICAL_ID>)
+  ORDER BY id DESC;
+
+========================================================================
+5) Auto-escalation tests for overdue tickets
+========================================================================
+
+Test AE1 - LOW overdue escalates to MEDIUM
+- Purpose: verify first escalation step.
+- Precondition: <TICKET_LOW_ID> exists with priority LOW, dueDate past, not DONE, not deleted.
+- Setup endpoint: POST /tickets (see section 3.5 body).
+- Immediate expected: response priority LOW, isOverdue false.
+- Wait: 70-90 seconds.
+- Verify via Swagger:
+  GET /tickets/<TICKET_LOW_ID>
+  Expected: priority MEDIUM, isOverdue false.
+- Verify via SQL:
+  SELECT priority, is_overdue FROM tickets WHERE id=<TICKET_LOW_ID>;
+  Expected: MEDIUM, false.
+- Audit expectation:
+  one AUTO_ESCALATE row, actor_type=SYSTEM, entity_id=<TICKET_LOW_ID>.
+
+Test AE2 - MEDIUM overdue escalates to HIGH
+- Precondition: <TICKET_MEDIUM_ID> created.
+- Wait: 70-90 seconds.
+- Verify: GET /tickets/<TICKET_MEDIUM_ID>
+  Expected: priority HIGH, isOverdue false.
+- SQL expected: HIGH, false.
+- Audit expected: AUTO_ESCALATE, SYSTEM.
+
+Test AE3 - HIGH overdue escalates to CRITICAL
+- Precondition: <TICKET_HIGH_ID> created.
+- Wait: 70-90 seconds.
+- Verify: GET /tickets/<TICKET_HIGH_ID>
+  Expected: priority CRITICAL, isOverdue false (first CRITICAL step only).
+- SQL expected: CRITICAL, false.
+- Audit expected: AUTO_ESCALATE, SYSTEM.
+
+Test AE4 - CRITICAL overdue stays CRITICAL
+- Precondition: <TICKET_CRITICAL_ID> created as CRITICAL past due.
+- Wait: 70-90 seconds.
+- Verify: GET /tickets/<TICKET_CRITICAL_ID>
+  Expected: priority remains CRITICAL.
+- SQL expected: priority CRITICAL.
+- Audit: AUTO_ESCALATE may still be created for overdue flag change (see AE5).
+
+Test AE5 - isOverdue becomes true for overdue CRITICAL ticket
+- Precondition: CRITICAL + past due + isOverdue currently false.
+- Wait: 70-90 seconds.
+- Verify:
+  GET /tickets/<TICKET_CRITICAL_ID> => isOverdue true.
+- SQL:
+  SELECT priority, is_overdue FROM tickets WHERE id=<TICKET_CRITICAL_ID>;
+  Expected: CRITICAL, true.
+- Audit:
+  AUTO_ESCALATE with details_json showing overdueBefore false, overdueAfter true.
+
+Test AE6 - Future dueDate ticket not changed
+- Precondition: <TICKET_FUTURE_ID> created with dueDate in future.
+- Wait: 70-90 seconds.
+- Verify:
+  GET /tickets/<TICKET_FUTURE_ID>
+  Expected unchanged priority and isOverdue=false.
+- SQL expected unchanged row.
+- Audit: no AUTO_ESCALATE expected for this ticket.
+
+Test AE7 - Null dueDate ticket not changed
+- Precondition: <TICKET_NULL_DUE_ID> created without dueDate.
+- Wait: 70-90 seconds.
+- Verify unchanged via GET.
+- SQL expected unchanged.
+- Audit: no AUTO_ESCALATE expected.
+
+Test AE8 - DONE ticket not escalated
+- Precondition: <TICKET_DONE_ID> created with status DONE and past due date.
+- Wait: 70-90 seconds.
+- Verify:
+  GET /tickets/<TICKET_DONE_ID>
+  Expected unchanged priority, isOverdue stays false.
+- SQL expected unchanged.
+- Audit: no AUTO_ESCALATE expected.
+
+Test AE9 - Soft-deleted ticket not escalated
+- Precondition: <TICKET_DELETED_ID> exists and soft-deleted (deleted_at not null).
+- Wait: 70-90 seconds.
+- Verify via SQL only (GET by id returns 404 for deleted):
+  SELECT priority, is_overdue, deleted_at FROM tickets WHERE id=<TICKET_DELETED_ID>;
+  Expected: deleted_at not null and priority/is_overdue unchanged.
+- Audit: no AUTO_ESCALATE expected.
+
+Test AE10 - Already-overdue behavior across multiple cycles
+- Purpose: show one-step-per-cycle behavior.
+- Setup: create HIGH past-due ticket.
+- Wait cycle #1 (70-90s): expect CRITICAL + isOverdue false.
+- Wait cycle #2 (70-90s): expect CRITICAL + isOverdue true.
+- Wait cycle #3 (70-90s): expect unchanged CRITICAL + true (idempotent).
+- Verify with GET and SQL after each cycle.
+- Audit:
+  cycle #1 likely AUTO_ESCALATE (priority change),
+  cycle #2 likely AUTO_ESCALATE (overdue flag change),
+  cycle #3 no new AUTO_ESCALATE for unchanged state.
+
+========================================================================
+6) Auto-assignment tests (implemented; reused in Phase 5 evidence)
+========================================================================
+
+Auto-assignment is implemented in TicketService.createTicket and still relevant
+as system automation evidence (even though introduced in earlier phase).
+
+Test AA1 - Create ticket without assigneeId
+- Purpose: system picks least-loaded developer.
+- Precondition:
+  <DEV1_ID>, <DEV2_ID>, <PROJECT_ID> exist.
+- Endpoint:
+  POST /tickets
+- Body:
+  {
+    "title": "P5 auto assign test",
+    "description": "no assignee in request",
+    "status": "TODO",
+    "priority": "LOW",
+    "type": "BUG",
+    "projectId": <PROJECT_ID>
+  }
+- Expected: 200 and assigneeId set to selected developer (or null if no developer).
+- SQL:
+  SELECT id, assignee_id, status, deleted_at FROM tickets WHERE id=<NEW_TICKET_ID>;
+
+Test AA2 - Least-loaded DEVELOPER selection
+- Setup:
+  create enough open non-DONE tickets assigned to DEV1 so DEV2 has lower load.
+- Create new ticket without assigneeId.
+- Expected:
+  assigneeId should be DEV2 (lower open workload).
+- SQL workload check:
+  SELECT assignee_id, count(*)
+  FROM tickets
+  WHERE project_id=<PROJECT_ID>
+    AND deleted_at IS NULL
+    AND status <> 'DONE'
+  GROUP BY assignee_id
+  ORDER BY count(*) ASC;
+
+Test AA3 - DONE/deleted excluded from workload counting
+- Setup:
+  mark some tickets DONE and soft-delete others.
+- Create ticket without assigneeId.
+- Expected:
+  only active non-DONE tickets affect workload.
+- Reason from code:
+  countOpenAssignedTickets filters deleted_at is null and status <> DONE.
+
+Test AA4 - No DEVELOPER exists
+- Setup:
+  create project where only ADMIN users exist (or delete dev users from test data).
+- Create ticket without assigneeId.
+- Expected response:
+  assigneeId = null, status 200.
+- SQL verify assignee_id is null.
+
+Test AA5 - Equal workload tie-break
+- Current implemented behavior:
+  developers are loaded by created_at ascending; stream.min keeps first encountered
+  on equal workload.
+- Setup equal loads for DEV1 and DEV2.
+- Create ticket without assigneeId.
+- Expected:
+  older registered developer selected.
+
+Auto-assignment audit expectation (all cases where assignment actually happened):
+  audit_logs contains action=AUTO_ASSIGN, actor_type=SYSTEM, entity_type=TICKET.
+
+========================================================================
+7) Audit log verification (scheduler + automation)
+========================================================================
+
+Main SQL:
+  SELECT id, action, entity_type, entity_id, actor_type, actor_user_id, created_at, details_json
+  FROM audit_logs
+  ORDER BY id DESC;
+
+Expected for scheduler changes:
+- action = AUTO_ESCALATE
+- entity_type = TICKET
+- actor_type = SYSTEM
+- actor_user_id = NULL
+- details_json contains source=ticket-escalation and before/after fields
+
+Expected for auto-assignment:
+- action = AUTO_ASSIGN
+- entity_type = TICKET
+- actor_type = SYSTEM
+- actor_user_id = NULL
+- details_json includes assigneeId.
+
+Expected for manual ticket changes:
+- action = UPDATE
+- actor_type = USER
+
+========================================================================
+8) Swagger test paths and JSON bodies (Phase 5 relevant)
+========================================================================
+
+Note: all endpoints below require Authorization except /auth/login.
+
+8.1 Auth
+- POST /auth/login
+  Auth required: No
+  Body:
+    {
+      "username": "phase5_admin_local",
+      "password": "Password123!"
+    }
+  Expected: 200
+  Copy: accessToken -> <ACCESS_TOKEN>
+
+8.2 Users (setup)
+- POST /users
+  Auth: Yes
+  Body example:
+    {
+      "username": "phase5_dev_01",
+      "email": "phase5_dev_01@example.com",
+      "fullName": "Phase5 Developer One",
+      "role": "DEVELOPER",
+      "password": "Phase5Dev01!"
+    }
+  Expected: 200
+  Copy: id -> <DEV1_ID> (and similarly <DEV2_ID>)
+
+8.3 Projects (setup)
+- POST /projects
+  Auth: Yes
+  Body:
+    {
+      "name": "Phase5 Scheduler Project",
+      "description": "Project for scheduler and automation tests",
+      "ownerId": <DEV1_ID>
+    }
+  Expected: 200
+  Copy: id -> <PROJECT_ID>
+
+8.4 Tickets create
+- POST /tickets
+  Auth: Yes
+  Body for past-due LOW:
+    {
+      "title": "P5 LOW overdue",
+      "description": "should escalate to MEDIUM",
+      "status": "TODO",
+      "priority": "LOW",
+      "type": "BUG",
+      "projectId": <PROJECT_ID>,
+      "assigneeId": <DEV1_ID>,
+      "dueDate": "2020-01-01T00:00:00Z"
+    }
+  Expected: 200
+  Response fields to copy: id, priority, isOverdue
+
+8.5 Ticket read (post-scheduler verification)
+- GET /tickets/{ticketId}
+  Auth: Yes
+  Expected: 200 for active ticket
+  Verify fields: status, priority, dueDate, isOverdue, assigneeId
+
+8.6 Ticket update (manual reset test)
+- PATCH /tickets/{ticketId}
+  Auth: Yes
+  Body:
+    {
+      "priority": "MEDIUM"
+    }
+  Expected: 200
+  Follow with GET /tickets/{ticketId} => isOverdue should be false immediately.
+
+8.7 Ticket soft delete (exclude from scheduler)
+- DELETE /tickets/{ticketId}
+  Auth: Yes
+  Expected: 200
+
+8.8 Deleted tickets listing (admin check)
+- GET /tickets/deleted?projectId=<PROJECT_ID>
+  Auth: Yes (ADMIN role required)
+  Expected: 200
+
+8.9 Workload endpoint (auto-assignment verification helper)
+- GET /projects/{projectId}/workload
+  Auth: Yes
+  Expected: 200
+  Fields:
+    [{ "userId": ..., "username": "...", "openTicketCount": ... }]
+
+========================================================================
+9) Database verification checklist
+========================================================================
+
+Tickets:
+  SELECT id, title, status, priority, due_date, is_overdue, assignee_id, deleted_at
+  FROM tickets
+  ORDER BY id DESC;
+
+Users:
+  SELECT id, username, role
+  FROM users
+  ORDER BY id DESC;
+
+Projects:
+  SELECT id, name, owner_id, deleted_at
+  FROM projects
+  ORDER BY id DESC;
+
+Audit logs:
+  SELECT id, action, entity_type, entity_id, actor_type, actor_user_id, details_json, created_at
+  FROM audit_logs
+  ORDER BY id DESC;
+
+Optional workload cross-check:
+  SELECT assignee_id, count(*) AS open_count
+  FROM tickets
+  WHERE project_id=<PROJECT_ID>
+    AND deleted_at IS NULL
+    AND status <> 'DONE'
+  GROUP BY assignee_id
+  ORDER BY open_count ASC, assignee_id ASC;
+
+Scheduler-related tables:
+- No dedicated scheduler table exists.
+- Scheduler effects are visible through:
+  1) tickets.priority and tickets.is_overdue
+  2) audit_logs rows with AUTO_ESCALATE.
+
+========================================================================
+10) Negative and edge-case tests
+========================================================================
+
+NE1 - dueDate future:
+- Create ticket with future dueDate
+- Wait one cycle
+- Expect no change.
+
+NE2 - dueDate past:
+- Create ticket with past dueDate + LOW/MEDIUM/HIGH
+- Expect one-step escalation per cycle.
+
+NE3 - dueDate null:
+- Create ticket without dueDate
+- Expect no scheduler change.
+
+NE4 - DONE ticket:
+- Create or update ticket to DONE with past dueDate
+- Expect no scheduler change.
+
+NE5 - Soft-deleted ticket:
+- Create past-due ticket then delete it
+- Expect no scheduler change.
+
+NE6 - CRITICAL overdue ticket:
+- Create CRITICAL past-due
+- Expect CRITICAL unchanged and isOverdue=true after cycle.
+
+NE7 - Invalid enum values:
+- Try POST /tickets with invalid priority/status/type
+  example:
+    "priority": "URGENT"
+- Expect 400 validation/binding error.
+
+NE8 - Missing required fields:
+- Omit title/status/priority/type/projectId in POST /tickets
+- Expect 400.
+
+NE9 - Unauthorized setup endpoint access:
+- Call POST /tickets without token
+- Expect 401.
+
+NE10 - Scheduler must not change status:
+- For escalated ticket, compare status before/after cycle.
+- Expect status unchanged.
+
+========================================================================
+11) Manual timing instructions
+========================================================================
+
+Where interval is configured:
+- src/main/resources/application.yaml
+  issueflow.ticket.escalation.fixed-delay-ms: 60000
+
+How long to wait:
+- Wait 70-90 seconds after creating test data for one cycle.
+- For multi-cycle tests, wait same interval between checks.
+
+How to identify scheduler run:
+- There is no explicit scheduler log line in current scheduler code.
+- Practical confirmation methods:
+  1) Ticket fields changed in DB/GET response.
+  2) New AUTO_ESCALATE rows in audit_logs.
+
+Can interval be reduced locally?
+- Yes, for local testing only, you can reduce fixed-delay-ms
+  (example: 5000).
+- This is safe for local manual testing, but do not use tiny intervals in
+  production-like settings.
+- If changed locally for convenience, restore or document your local-only value.
+
+========================================================================
+12) Not implemented yet / not testable through Swagger directly
+========================================================================
+
+1) No dedicated scheduler trigger endpoint
+   - There is no API like POST /tickets/escalation/run.
+   - Scheduler is background-only via @Scheduled.
+
+2) No audit logs retrieval endpoint in API
+   - AuditService exists, but no AuditController endpoint currently implemented.
+   - Audit verification must be done via SQL.
+
+3) Scheduler run observability in logs is limited
+   - Current scheduler has no explicit "cycle started/completed" log statements.
+   - Verification relies on DB state and audit rows.
+
+End of file.

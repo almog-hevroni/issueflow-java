@@ -134,6 +134,7 @@ public class TicketService {
 		}
 		if (request.priority() != null) {
 			ticket.setPriority(request.priority());
+			ticket.setOverdue(false);
 		}
 		if (request.dueDate() != null) {
 			ticket.setDueDate(request.dueDate());

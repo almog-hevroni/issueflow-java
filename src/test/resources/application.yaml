@@ -32,3 +32,8 @@ issueflow:
     jwt:
       secret: "test-secret-key-test-secret-key-32chars"
       expiration-seconds: 3600
+  ticket:
+    escalation:
+      enabled: false
+      fixed-delay-ms: 60000
+      batch-size: 100
