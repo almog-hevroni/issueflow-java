@@ -41,7 +41,7 @@ IssueFlow follows a layered Spring Boot architecture with clear separation betwe
 
 Architecture diagram:
 
-![IssueFlow Architecture](architecture%20diagram.png)
+<img src="architecture%20diagram.png" alt="IssueFlow Architecture" width="500" />
 
 ## 4) Architecture Explanation
 
