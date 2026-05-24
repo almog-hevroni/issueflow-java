@@ -5,7 +5,9 @@ import com.att.tdp.issueflow.comment.dto.MentionedUserResponse;
 import com.att.tdp.issueflow.comment.entity.Comment;
 import com.att.tdp.issueflow.comment.entity.CommentMention;
 import com.att.tdp.issueflow.comment.repository.CommentMentionRepository;
+import com.att.tdp.issueflow.common.exception.BadRequestException;
 import com.att.tdp.issueflow.common.exception.NotFoundException;
+import com.att.tdp.issueflow.user.dto.UserMentionsResponse;
 import com.att.tdp.issueflow.user.repository.UserRepository;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -65,5 +67,26 @@ public class MentionService {
 						comment.getContent(),
 						mentionsByCommentId.getOrDefault(comment.getId(), List.of())))
 				.toList();
+	}
+
+	@Transactional(readOnly = true)
+	public UserMentionsResponse getMentionsForUser(Long userId, Integer page, Integer pageSize) {
+		int resolvedPage = page == null ? 1 : page;
+		int resolvedPageSize = pageSize == null ? 50 : pageSize;
+		if (resolvedPage < 1) {
+			throw new BadRequestException("page must be >= 1");
+		}
+		if (resolvedPageSize < 1) {
+			throw new BadRequestException("pageSize must be >= 1");
+		}
+
+		List<CommentResponse> allMentions = getMentionsForUser(userId);
+		int fromIndex = (resolvedPage - 1) * resolvedPageSize;
+		if (fromIndex >= allMentions.size()) {
+			return new UserMentionsResponse(List.of(), allMentions.size(), resolvedPage);
+		}
+		int toIndex = Math.min(allMentions.size(), fromIndex + resolvedPageSize);
+		List<CommentResponse> pageData = allMentions.subList(fromIndex, toIndex);
+		return new UserMentionsResponse(pageData, allMentions.size(), resolvedPage);
 	}
 }

@@ -8,6 +8,7 @@ import com.att.tdp.issueflow.common.exception.InvalidStateTransitionException;
 import com.att.tdp.issueflow.common.exception.NotFoundException;
 import com.att.tdp.issueflow.project.dto.ProjectWorkloadResponse;
 import com.att.tdp.issueflow.project.entity.Project;
+import com.att.tdp.issueflow.project.repository.ProjectMemberRepository;
 import com.att.tdp.issueflow.project.repository.ProjectRepository;
 import com.att.tdp.issueflow.ticket.dto.CreateTicketRequest;
 import com.att.tdp.issueflow.ticket.dto.TicketResponse;
@@ -33,6 +34,7 @@ public class TicketService {
 	private final TicketRepository ticketRepository;
 	private final TicketDependencyRepository ticketDependencyRepository;
 	private final ProjectRepository projectRepository;
+	private final ProjectMemberRepository projectMemberRepository;
 	private final UserRepository userRepository;
 	private final AuditService auditService;
 
@@ -40,12 +42,14 @@ public class TicketService {
 			TicketRepository ticketRepository,
 			TicketDependencyRepository ticketDependencyRepository,
 			ProjectRepository projectRepository,
+			ProjectMemberRepository projectMemberRepository,
 			UserRepository userRepository,
 			AuditService auditService
 	) {
 		this.ticketRepository = ticketRepository;
 		this.ticketDependencyRepository = ticketDependencyRepository;
 		this.projectRepository = projectRepository;
+		this.projectMemberRepository = projectMemberRepository;
 		this.userRepository = userRepository;
 		this.auditService = auditService;
 	}
@@ -90,7 +94,7 @@ public class TicketService {
 		ticket.setDueDate(request.dueDate());
 		ticket.setOverdue(false);
 		User assignee = request.assigneeId() != null
-				? resolveAssignee(request.assigneeId())
+				? resolveAssignee(project.getId(), request.assigneeId())
 				: selectAutoAssignee(project.getId());
 		ticket.setAssignee(assignee);
 
@@ -140,7 +144,7 @@ public class TicketService {
 			ticket.setDueDate(request.dueDate());
 		}
 		if (request.assigneeId() != null) {
-			ticket.setAssignee(resolveAssignee(request.assigneeId()));
+			ticket.setAssignee(resolveAssignee(ticket.getProject().getId(), request.assigneeId()));
 		}
 		ticketRepository.save(ticket);
 		auditService.recordUserAction(AuditAction.UPDATE, ENTITY_TYPE, ticketId, "{\"source\":\"tickets-api\"}");
@@ -171,16 +175,23 @@ public class TicketService {
 				.orElseThrow(() -> new NotFoundException("Ticket not found: " + ticketId));
 	}
 
-	private User resolveAssignee(Long assigneeId) {
+	private User resolveAssignee(Long projectId, Long assigneeId) {
 		if (assigneeId == null) {
 			return null;
 		}
-		return userRepository.findById(assigneeId)
+		User assignee = userRepository.findById(assigneeId)
 				.orElseThrow(() -> new NotFoundException("Assignee user not found: " + assigneeId));
+		if (assignee.getRole() != Role.DEVELOPER) {
+			throw new BadRequestException("Assignee must have role DEVELOPER");
+		}
+		if (projectId != null && !projectMemberRepository.existsByProject_IdAndUser_Id(projectId, assigneeId)) {
+			throw new BadRequestException("Assignee user is not linked to the project: " + assigneeId);
+		}
+		return assignee;
 	}
 
 	private User selectAutoAssignee(Long projectId) {
-		return userRepository.findAllByRoleOrderByCreatedAtAsc(Role.DEVELOPER).stream()
+		return getProjectDeveloperCandidates(projectId).stream()
 				.min((left, right) -> Long.compare(
 						ticketRepository.countOpenAssignedTickets(projectId, left.getId(), TicketStatus.DONE),
 						ticketRepository.countOpenAssignedTickets(projectId, right.getId(), TicketStatus.DONE)))
@@ -189,16 +200,22 @@ public class TicketService {
 
 	@Transactional(readOnly = true)
 	public List<ProjectWorkloadResponse> getWorkload(Long projectId) {
-		if (!projectRepository.existsByIdAndDeletedAtIsNull(projectId)) {
-			throw new NotFoundException("Project not found: " + projectId);
-		}
-		return userRepository.findAllByRoleOrderByCreatedAtAsc(Role.DEVELOPER).stream()
+		Project project = projectRepository.findByIdAndDeletedAtIsNull(projectId)
+				.orElseThrow(() -> new NotFoundException("Project not found: " + projectId));
+		return getProjectDeveloperCandidates(project.getId()).stream()
 				.map(user -> new ProjectWorkloadResponse(
 						user.getId(),
 						user.getUsername(),
-						ticketRepository.countOpenAssignedTickets(projectId, user.getId(), TicketStatus.DONE)))
+						ticketRepository.countOpenAssignedTickets(project.getId(), user.getId(), TicketStatus.DONE)))
 				.sorted(Comparator.comparingLong(ProjectWorkloadResponse::openTicketCount))
 				.toList();
+	}
+
+	private List<User> getProjectDeveloperCandidates(Long projectId) {
+		if (!projectRepository.existsByIdAndDeletedAtIsNull(projectId)) {
+			throw new NotFoundException("Project not found: " + projectId);
+		}
+		return projectMemberRepository.findProjectUsersByProjectIdAndRoleOrderByUserCreatedAtAsc(projectId, Role.DEVELOPER);
 	}
 
 	private void validateStatusTransition(TicketStatus currentStatus, TicketStatus newStatus) {

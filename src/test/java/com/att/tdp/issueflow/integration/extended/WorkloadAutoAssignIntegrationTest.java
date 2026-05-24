@@ -27,6 +27,7 @@ class WorkloadAutoAssignIntegrationTest extends ExtendedFeaturesIntegrationTestS
 		Long oldDevId = ownerId;
 		Long newDevId = userRepository.findByUsername("dev-new").orElseThrow().getId();
 		Long projectId = createProject(adminToken, ownerId, "Workload Project");
+		linkProjectMember(projectId, newDevId);
 
 		String createResponse = mockMvc.perform(post("/tickets")
 						.header("Authorization", "Bearer " + adminToken)
@@ -61,5 +62,103 @@ class WorkloadAutoAssignIntegrationTest extends ExtendedFeaturesIntegrationTestS
 				.toList();
 		assertEquals(1, autoAssignLogs.size());
 		assertEquals(AuditActorType.SYSTEM, autoAssignLogs.get(0).getActorType());
+	}
+
+	@Test
+	void autoAssignmentShouldNotUseDevelopersOutsideProjectScope() throws Exception {
+		createUserDirect("admin-scope", "admin-scope@example.com", Role.ADMIN, "Password123!");
+		createUserDirect("owner-scope", "owner-scope@example.com", Role.DEVELOPER, "Password123!");
+		createUserDirect("external-dev", "external-dev@example.com", Role.DEVELOPER, "Password123!");
+		String adminToken = obtainToken("admin-scope", "Password123!");
+		Long ownerId = userRepository.findByUsername("owner-scope").orElseThrow().getId();
+		Long projectId = createProject(adminToken, ownerId, "Scoped Project");
+
+		mockMvc.perform(post("/tickets")
+						.header("Authorization", "Bearer " + adminToken)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("""
+								{
+								  "title": "Scoped Auto Assign",
+								  "description": "auto",
+								  "status": "TODO",
+								  "priority": "LOW",
+								  "type": "BUG",
+								  "projectId": %d
+								}
+								""".formatted(projectId)))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.assigneeId").value(ownerId));
+
+		mockMvc.perform(get("/projects/{projectId}/workload", projectId)
+						.header("Authorization", "Bearer " + adminToken))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.length()").value(1))
+				.andExpect(jsonPath("$[0].userId").value(ownerId));
+	}
+
+	@Test
+	void explicitAssigneeMustBeProjectLinkedDeveloper() throws Exception {
+		createUserDirect("admin-assign", "admin-assign@example.com", Role.ADMIN, "Password123!");
+		createUserDirect("owner-assign", "owner-assign@example.com", Role.DEVELOPER, "Password123!");
+		createUserDirect("linked-dev", "linked-dev@example.com", Role.DEVELOPER, "Password123!");
+		createUserDirect("external-dev", "external-dev@example.com", Role.DEVELOPER, "Password123!");
+		createUserDirect("admin-user", "admin-user@example.com", Role.ADMIN, "Password123!");
+		String adminToken = obtainToken("admin-assign", "Password123!");
+
+		Long ownerId = userRepository.findByUsername("owner-assign").orElseThrow().getId();
+		Long linkedDevId = userRepository.findByUsername("linked-dev").orElseThrow().getId();
+		Long externalDevId = userRepository.findByUsername("external-dev").orElseThrow().getId();
+		Long adminUserId = userRepository.findByUsername("admin-user").orElseThrow().getId();
+		Long projectId = createProject(adminToken, ownerId, "Assignee Rules Project");
+		linkProjectMember(projectId, linkedDevId);
+
+		mockMvc.perform(post("/tickets")
+						.header("Authorization", "Bearer " + adminToken)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("""
+								{
+								  "title": "Linked Dev Ticket",
+								  "description": "ok",
+								  "status": "TODO",
+								  "priority": "LOW",
+								  "type": "BUG",
+								  "projectId": %d,
+								  "assigneeId": %d
+								}
+								""".formatted(projectId, linkedDevId)))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.assigneeId").value(linkedDevId));
+
+		mockMvc.perform(post("/tickets")
+						.header("Authorization", "Bearer " + adminToken)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("""
+								{
+								  "title": "External Dev Ticket",
+								  "description": "fail",
+								  "status": "TODO",
+								  "priority": "LOW",
+								  "type": "BUG",
+								  "projectId": %d,
+								  "assigneeId": %d
+								}
+								""".formatted(projectId, externalDevId)))
+				.andExpect(status().isBadRequest());
+
+		mockMvc.perform(post("/tickets")
+						.header("Authorization", "Bearer " + adminToken)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("""
+								{
+								  "title": "Admin Assignee Ticket",
+								  "description": "fail",
+								  "status": "TODO",
+								  "priority": "LOW",
+								  "type": "BUG",
+								  "projectId": %d,
+								  "assigneeId": %d
+								}
+								""".formatted(projectId, adminUserId)))
+				.andExpect(status().isBadRequest());
 	}
 }

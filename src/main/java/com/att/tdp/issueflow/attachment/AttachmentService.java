@@ -3,6 +3,8 @@ package com.att.tdp.issueflow.attachment;
 import com.att.tdp.issueflow.attachment.dto.AttachmentResponse;
 import com.att.tdp.issueflow.attachment.entity.Attachment;
 import com.att.tdp.issueflow.attachment.repository.AttachmentRepository;
+import com.att.tdp.issueflow.audit.AuditService;
+import com.att.tdp.issueflow.audit.enums.AuditAction;
 import com.att.tdp.issueflow.common.exception.BadRequestException;
 import com.att.tdp.issueflow.common.exception.NotFoundException;
 import com.att.tdp.issueflow.security.auth.AuthUserDetails;
@@ -37,17 +39,20 @@ public class AttachmentService {
 	private final AttachmentRepository attachmentRepository;
 	private final TicketRepository ticketRepository;
 	private final UserRepository userRepository;
+	private final AuditService auditService;
 	private final Path attachmentRoot;
 
 	public AttachmentService(
 			AttachmentRepository attachmentRepository,
 			TicketRepository ticketRepository,
 			UserRepository userRepository,
+			AuditService auditService,
 			@Value("${issueflow.attachments.storage-root:build/attachments}") String attachmentRoot
 	) {
 		this.attachmentRepository = attachmentRepository;
 		this.ticketRepository = ticketRepository;
 		this.userRepository = userRepository;
+		this.auditService = auditService;
 		this.attachmentRoot = Paths.get(attachmentRoot).toAbsolutePath().normalize();
 	}
 
@@ -78,6 +83,12 @@ public class AttachmentService {
 		attachment.setSizeBytes(file.getSize());
 		attachment.setStoragePath(targetPath.toString());
 		Attachment saved = attachmentRepository.save(attachment);
+		auditService.recordUserAction(
+				AuditAction.CREATE,
+				"ATTACHMENT",
+				saved.getId(),
+				"{\"source\":\"attachments-api\",\"ticketId\":%d}".formatted(ticketId)
+		);
 		return new AttachmentResponse(saved.getId(), ticketId, saved.getFileName(), saved.getContentType());
 	}
 
@@ -98,6 +109,12 @@ public class AttachmentService {
 			throw new IllegalStateException("Failed to delete attachment content", exception);
 		}
 		attachmentRepository.delete(attachment);
+		auditService.recordUserAction(
+				AuditAction.DELETE,
+				"ATTACHMENT",
+				attachmentId,
+				"{\"source\":\"attachments-api\",\"ticketId\":%d}".formatted(ticketId)
+		);
 	}
 
 	private void validateFile(MultipartFile file) {

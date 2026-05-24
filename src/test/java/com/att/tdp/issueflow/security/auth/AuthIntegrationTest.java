@@ -1,5 +1,6 @@
 package com.att.tdp.issueflow.security.auth;
 
+import com.att.tdp.issueflow.audit.repository.AuditLogRepository;
 import com.att.tdp.issueflow.user.entity.User;
 import com.att.tdp.issueflow.user.enums.Role;
 import com.att.tdp.issueflow.user.repository.UserRepository;
@@ -30,8 +31,12 @@ class AuthIntegrationTest {
 	@Autowired
 	private PasswordEncoder passwordEncoder;
 
+	@Autowired
+	private AuditLogRepository auditLogRepository;
+
 	@BeforeEach
 	void setup() {
+		auditLogRepository.deleteAll();
 		userRepository.findByUsername("dev-user").ifPresent(existing -> userRepository.deleteById(existing.getId()));
 		User user = new User();
 		user.setUsername("dev-user");

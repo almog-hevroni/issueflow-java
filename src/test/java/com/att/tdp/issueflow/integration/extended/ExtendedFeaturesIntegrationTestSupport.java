@@ -4,7 +4,11 @@ import com.att.tdp.issueflow.attachment.repository.AttachmentRepository;
 import com.att.tdp.issueflow.audit.repository.AuditLogRepository;
 import com.att.tdp.issueflow.comment.repository.CommentMentionRepository;
 import com.att.tdp.issueflow.comment.repository.CommentRepository;
+import com.att.tdp.issueflow.project.entity.ProjectMember;
+import com.att.tdp.issueflow.project.entity.ProjectMemberId;
+import com.att.tdp.issueflow.project.entity.Project;
 import com.att.tdp.issueflow.project.repository.ProjectRepository;
+import com.att.tdp.issueflow.project.repository.ProjectMemberRepository;
 import com.att.tdp.issueflow.security.auth.repository.RevokedTokenRepository;
 import com.att.tdp.issueflow.ticket.dependency.repository.TicketDependencyRepository;
 import com.att.tdp.issueflow.ticket.repository.TicketRepository;
@@ -44,6 +48,9 @@ abstract class ExtendedFeaturesIntegrationTestSupport {
 	protected ProjectRepository projectRepository;
 
 	@Autowired
+	protected ProjectMemberRepository projectMemberRepository;
+
+	@Autowired
 	protected TicketRepository ticketRepository;
 
 	@Autowired
@@ -72,6 +79,7 @@ abstract class ExtendedFeaturesIntegrationTestSupport {
 		ticketDependencyRepository.deleteAll();
 		attachmentRepository.deleteAll();
 		ticketRepository.deleteAll();
+		projectMemberRepository.deleteAllInBatch();
 		projectRepository.deleteAll();
 		revokedTokenRepository.deleteAll();
 		userRepository.deleteAll();
@@ -139,6 +147,20 @@ abstract class ExtendedFeaturesIntegrationTestSupport {
 		user.setRole(role);
 		user.setPasswordHash(passwordEncoder.encode(password));
 		userRepository.saveAndFlush(user);
+	}
+
+	protected void linkProjectMember(Long projectId, Long userId) {
+		Project project = projectRepository.findById(projectId).orElseThrow();
+		User user = userRepository.findById(userId).orElseThrow();
+		if (projectMemberRepository.existsByProject_IdAndUser_Id(projectId, userId)) {
+			return;
+		}
+		ProjectMember member = new ProjectMember();
+		member.setId(new ProjectMemberId(projectId, userId));
+		member.setProject(project);
+		member.setUser(user);
+		member.setCreatedAt(java.time.Instant.now());
+		projectMemberRepository.saveAndFlush(member);
 	}
 
 	protected String obtainToken(String username, String password) throws Exception {

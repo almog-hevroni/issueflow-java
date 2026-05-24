@@ -5,6 +5,10 @@ import com.att.tdp.issueflow.audit.entity.AuditLog;
 import com.att.tdp.issueflow.audit.repository.AuditLogRepository;
 import com.att.tdp.issueflow.comment.repository.CommentMentionRepository;
 import com.att.tdp.issueflow.comment.repository.CommentRepository;
+import com.att.tdp.issueflow.project.entity.Project;
+import com.att.tdp.issueflow.project.entity.ProjectMember;
+import com.att.tdp.issueflow.project.entity.ProjectMemberId;
+import com.att.tdp.issueflow.project.repository.ProjectMemberRepository;
 import com.att.tdp.issueflow.project.repository.ProjectRepository;
 import com.att.tdp.issueflow.security.auth.repository.RevokedTokenRepository;
 import com.att.tdp.issueflow.ticket.dependency.repository.TicketDependencyRepository;
@@ -53,6 +57,9 @@ class CoreCrudIntegrationTest {
 	private ProjectRepository projectRepository;
 
 	@Autowired
+	private ProjectMemberRepository projectMemberRepository;
+
+	@Autowired
 	private TicketRepository ticketRepository;
 
 	@Autowired
@@ -81,6 +88,7 @@ class CoreCrudIntegrationTest {
 		ticketDependencyRepository.deleteAll();
 		attachmentRepository.deleteAll();
 		ticketRepository.deleteAll();
+		projectMemberRepository.deleteAllInBatch();
 		projectRepository.deleteAll();
 		revokedTokenRepository.deleteAll();
 		userRepository.deleteAll();
@@ -204,6 +212,7 @@ class CoreCrudIntegrationTest {
 				.getResponse()
 				.getContentAsString();
 		Long projectId = objectMapper.readTree(projectResponse).get("id").asLong();
+		linkProjectMember(projectId, assigneeId);
 
 		String ticketResponse = mockMvc.perform(post("/tickets")
 						.header("Authorization", "Bearer " + token)
@@ -341,6 +350,20 @@ class CoreCrudIntegrationTest {
 		user.setRole(role);
 		user.setPasswordHash(passwordEncoder.encode(password));
 		userRepository.saveAndFlush(user);
+	}
+
+	private void linkProjectMember(Long projectId, Long userId) {
+		Project project = projectRepository.findById(projectId).orElseThrow();
+		User user = userRepository.findById(userId).orElseThrow();
+		if (projectMemberRepository.existsByProject_IdAndUser_Id(projectId, userId)) {
+			return;
+		}
+		ProjectMember member = new ProjectMember();
+		member.setId(new ProjectMemberId(projectId, userId));
+		member.setProject(project);
+		member.setUser(user);
+		member.setCreatedAt(java.time.Instant.now());
+		projectMemberRepository.saveAndFlush(member);
 	}
 
 	private String obtainToken(String username, String password) throws Exception {

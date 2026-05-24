@@ -42,7 +42,19 @@ class MentionsIntegrationTest extends ExtendedFeaturesIntegrationTestSupport {
 		mockMvc.perform(get("/users/{userId}/mentions", mentionedId)
 						.header("Authorization", "Bearer " + adminToken))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$[0].content").value("second @mentioned"))
-				.andExpect(jsonPath("$[1].content").value("first @mentioned"));
+				.andExpect(jsonPath("$.total").value(2))
+				.andExpect(jsonPath("$.page").value(1))
+				.andExpect(jsonPath("$.data[0].content").value("second @mentioned"))
+				.andExpect(jsonPath("$.data[1].content").value("first @mentioned"));
+
+		mockMvc.perform(get("/users/{userId}/mentions", mentionedId)
+						.header("Authorization", "Bearer " + adminToken)
+						.param("page", "1")
+						.param("pageSize", "1"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.total").value(2))
+				.andExpect(jsonPath("$.page").value(1))
+				.andExpect(jsonPath("$.data.length()").value(1))
+				.andExpect(jsonPath("$.data[0].content").value("second @mentioned"));
 	}
 }

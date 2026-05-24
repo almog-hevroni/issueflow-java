@@ -1,5 +1,7 @@
 package com.att.tdp.issueflow.ticket.dependency;
 
+import com.att.tdp.issueflow.audit.AuditService;
+import com.att.tdp.issueflow.audit.enums.AuditAction;
 import com.att.tdp.issueflow.common.exception.BadRequestException;
 import com.att.tdp.issueflow.common.exception.NotFoundException;
 import com.att.tdp.issueflow.ticket.dependency.dto.AddDependencyRequest;
@@ -19,10 +21,16 @@ public class TicketDependencyService {
 
 	private final TicketRepository ticketRepository;
 	private final TicketDependencyRepository ticketDependencyRepository;
+	private final AuditService auditService;
 
-	public TicketDependencyService(TicketRepository ticketRepository, TicketDependencyRepository ticketDependencyRepository) {
+	public TicketDependencyService(
+			TicketRepository ticketRepository,
+			TicketDependencyRepository ticketDependencyRepository,
+			AuditService auditService
+	) {
 		this.ticketRepository = ticketRepository;
 		this.ticketDependencyRepository = ticketDependencyRepository;
+		this.auditService = auditService;
 	}
 
 	@Transactional
@@ -49,6 +57,12 @@ public class TicketDependencyService {
 		dependency.setBlockedByTicket(blocker);
 		dependency.setCreatedAt(Instant.now());
 		ticketDependencyRepository.save(dependency);
+		auditService.recordUserAction(
+				AuditAction.CREATE,
+				"TICKET_DEPENDENCY",
+				ticketId,
+				"{\"source\":\"dependencies-api\",\"blockedBy\":%d}".formatted(blockerId)
+		);
 	}
 
 	@Transactional(readOnly = true)
@@ -71,6 +85,12 @@ public class TicketDependencyService {
 		if (removed == 0) {
 			throw new NotFoundException("Dependency not found");
 		}
+		auditService.recordUserAction(
+				AuditAction.DELETE,
+				"TICKET_DEPENDENCY",
+				ticketId,
+				"{\"source\":\"dependencies-api\",\"blockedBy\":%d}".formatted(blockerId)
+		);
 	}
 
 	private Ticket findActiveTicket(Long ticketId) {

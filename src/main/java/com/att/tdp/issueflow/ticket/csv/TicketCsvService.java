@@ -1,7 +1,10 @@
 package com.att.tdp.issueflow.ticket.csv;
 
+import com.att.tdp.issueflow.audit.AuditService;
+import com.att.tdp.issueflow.audit.enums.AuditAction;
 import com.att.tdp.issueflow.common.exception.BadRequestException;
 import com.att.tdp.issueflow.common.exception.NotFoundException;
+import com.att.tdp.issueflow.project.repository.ProjectMemberRepository;
 import com.att.tdp.issueflow.project.entity.Project;
 import com.att.tdp.issueflow.project.repository.ProjectRepository;
 import com.att.tdp.issueflow.ticket.entity.Ticket;
@@ -10,6 +13,7 @@ import com.att.tdp.issueflow.ticket.enums.TicketStatus;
 import com.att.tdp.issueflow.ticket.enums.TicketType;
 import com.att.tdp.issueflow.ticket.repository.TicketRepository;
 import com.att.tdp.issueflow.user.entity.User;
+import com.att.tdp.issueflow.user.enums.Role;
 import com.att.tdp.issueflow.user.repository.UserRepository;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -30,6 +34,8 @@ import org.springframework.web.multipart.MultipartFile;
 @Service
 public class TicketCsvService {
 
+	private static final String ENTITY_TYPE = "TICKET";
+
 	private static final CSVFormat EXPORT_FORMAT = CSVFormat.DEFAULT.builder()
 			.setHeader("id", "title", "description", "status", "priority", "type", "assigneeId")
 			.build();
@@ -42,16 +48,22 @@ public class TicketCsvService {
 
 	private final TicketRepository ticketRepository;
 	private final ProjectRepository projectRepository;
+	private final ProjectMemberRepository projectMemberRepository;
 	private final UserRepository userRepository;
+	private final AuditService auditService;
 
 	public TicketCsvService(
 			TicketRepository ticketRepository,
 			ProjectRepository projectRepository,
-			UserRepository userRepository
+			ProjectMemberRepository projectMemberRepository,
+			UserRepository userRepository,
+			AuditService auditService
 	) {
 		this.ticketRepository = ticketRepository;
 		this.projectRepository = projectRepository;
+		this.projectMemberRepository = projectMemberRepository;
 		this.userRepository = userRepository;
+		this.auditService = auditService;
 	}
 
 	@Transactional(readOnly = true)
@@ -99,7 +111,16 @@ public class TicketCsvService {
 				long rowNumber = record.getRecordNumber() + 1;
 				try {
 					Ticket ticket = buildTicketFromRecord(project, record);
-					ticketRepository.save(ticket);
+					Ticket saved = ticketRepository.save(ticket);
+					auditService.recordUserAction(
+							AuditAction.CREATE,
+							ENTITY_TYPE,
+							saved.getId(),
+							"{\"source\":\"tickets-csv-import\",\"projectId\":%d,\"row\":%d}".formatted(
+									projectId,
+									rowNumber
+							)
+					);
 					created++;
 				} catch (RuntimeException exception) {
 					failed++;
@@ -138,6 +159,12 @@ public class TicketCsvService {
 			}
 			User assignee = userRepository.findById(assigneeId)
 					.orElseThrow(() -> new NotFoundException("Assignee user not found: " + assigneeId));
+			if (assignee.getRole() != Role.DEVELOPER) {
+				throw new BadRequestException("Assignee must have role DEVELOPER");
+			}
+			if (!projectMemberRepository.existsByProject_IdAndUser_Id(project.getId(), assigneeId)) {
+				throw new BadRequestException("Assignee user is not linked to the project: " + assigneeId);
+			}
 			ticket.setAssignee(assignee);
 		}
 		return ticket;

@@ -8,8 +8,12 @@ import com.att.tdp.issueflow.project.dto.CreateProjectRequest;
 import com.att.tdp.issueflow.project.dto.ProjectResponse;
 import com.att.tdp.issueflow.project.dto.UpdateProjectRequest;
 import com.att.tdp.issueflow.project.entity.Project;
+import com.att.tdp.issueflow.project.entity.ProjectMember;
+import com.att.tdp.issueflow.project.entity.ProjectMemberId;
+import com.att.tdp.issueflow.project.repository.ProjectMemberRepository;
 import com.att.tdp.issueflow.project.repository.ProjectRepository;
 import com.att.tdp.issueflow.user.entity.User;
+import com.att.tdp.issueflow.user.enums.Role;
 import com.att.tdp.issueflow.user.repository.UserRepository;
 import java.time.Instant;
 import java.util.List;
@@ -22,15 +26,18 @@ public class ProjectService {
 	private static final String ENTITY_TYPE = "PROJECT";
 
 	private final ProjectRepository projectRepository;
+	private final ProjectMemberRepository projectMemberRepository;
 	private final UserRepository userRepository;
 	private final AuditService auditService;
 
 	public ProjectService(
 			ProjectRepository projectRepository,
+			ProjectMemberRepository projectMemberRepository,
 			UserRepository userRepository,
 			AuditService auditService
 	) {
 		this.projectRepository = projectRepository;
+		this.projectMemberRepository = projectMemberRepository;
 		this.userRepository = userRepository;
 		this.auditService = auditService;
 	}
@@ -62,6 +69,7 @@ public class ProjectService {
 		project.setOwner(owner);
 
 		Project saved = projectRepository.save(project);
+		ensureOwnerDeveloperMembership(saved, owner);
 		auditService.recordUserAction(AuditAction.CREATE, ENTITY_TYPE, saved.getId(), "{\"source\":\"projects-api\"}");
 		return toResponse(saved);
 	}
@@ -105,6 +113,21 @@ public class ProjectService {
 	private Project findActiveProject(Long projectId) {
 		return projectRepository.findByIdAndDeletedAtIsNull(projectId)
 				.orElseThrow(() -> new NotFoundException("Project not found: " + projectId));
+	}
+
+	private void ensureOwnerDeveloperMembership(Project project, User owner) {
+		if (owner.getRole() != Role.DEVELOPER) {
+			return;
+		}
+		if (projectMemberRepository.existsByProject_IdAndUser_Id(project.getId(), owner.getId())) {
+			return;
+		}
+		ProjectMember member = new ProjectMember();
+		member.setId(new ProjectMemberId(project.getId(), owner.getId()));
+		member.setProject(project);
+		member.setUser(owner);
+		member.setCreatedAt(Instant.now());
+		projectMemberRepository.save(member);
 	}
 
 	private ProjectResponse toResponse(Project project) {

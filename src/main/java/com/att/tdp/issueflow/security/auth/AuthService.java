@@ -1,5 +1,7 @@
 package com.att.tdp.issueflow.security.auth;
 
+import com.att.tdp.issueflow.audit.AuditService;
+import com.att.tdp.issueflow.audit.enums.AuditAction;
 import com.att.tdp.issueflow.security.auth.dto.AuthMeResponse;
 import com.att.tdp.issueflow.security.auth.dto.LoginResponse;
 import com.att.tdp.issueflow.security.jwt.JwtService;
@@ -17,15 +19,18 @@ public class AuthService {
 	private final AuthenticationManager authenticationManager;
 	private final JwtService jwtService;
 	private final TokenRevocationService tokenRevocationService;
+	private final AuditService auditService;
 
 	public AuthService(
 			AuthenticationManager authenticationManager,
 			JwtService jwtService,
-			TokenRevocationService tokenRevocationService
+			TokenRevocationService tokenRevocationService,
+			AuditService auditService
 	) {
 		this.authenticationManager = authenticationManager;
 		this.jwtService = jwtService;
 		this.tokenRevocationService = tokenRevocationService;
+		this.auditService = auditService;
 	}
 
 	public LoginResponse login(String username, String password) {
@@ -34,6 +39,12 @@ public class AuthService {
 		);
 		AuthUserDetails principal = (AuthUserDetails) authentication.getPrincipal();
 		String token = jwtService.generateToken(principal.getId(), principal.getUsername(), principal.getUser().getRole());
+		auditService.recordUserAction(
+				AuditAction.LOGIN,
+				"AUTH",
+				principal.getId(),
+				"{\"source\":\"auth-api\"}"
+		);
 		return new LoginResponse(token, "Bearer", jwtService.getExpirationSeconds());
 	}
 
@@ -42,6 +53,15 @@ public class AuthService {
 		JwtTokenDetails tokenDetails = jwtService.extractTokenDetails(rawToken);
 		tokenRevocationService.revoke(rawToken, tokenDetails);
 		tokenRevocationService.purgeExpiredRevocations();
+		Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+		if (authentication != null && authentication.getPrincipal() instanceof AuthUserDetails principal) {
+			auditService.recordUserAction(
+					AuditAction.LOGOUT,
+					"AUTH",
+					principal.getId(),
+					"{\"source\":\"auth-api\"}"
+			);
+		}
 	}
 
 	public AuthMeResponse currentUser() {

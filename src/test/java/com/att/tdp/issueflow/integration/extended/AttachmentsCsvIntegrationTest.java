@@ -1,10 +1,13 @@
 package com.att.tdp.issueflow.integration.extended;
 
+import com.att.tdp.issueflow.audit.enums.AuditAction;
+import com.att.tdp.issueflow.audit.enums.AuditActorType;
 import com.att.tdp.issueflow.user.enums.Role;
 import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockMultipartFile;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -80,6 +83,17 @@ class AttachmentsCsvIntegrationTest extends ExtendedFeaturesIntegrationTestSuppo
 				.andExpect(jsonPath("$.created").value(1))
 				.andExpect(jsonPath("$.failed").value(1))
 				.andExpect(jsonPath("$.errors[0]").exists());
+
+		Long adminUserId = userRepository.findByUsername("admin").orElseThrow().getId();
+		var csvCreateLogs = auditLogRepository.findAll().stream()
+				.filter(log -> log.getAction() == AuditAction.CREATE)
+				.filter(log -> "TICKET".equals(log.getEntityType()))
+				.filter(log -> log.getActorType() == AuditActorType.USER)
+				.filter(log -> log.getActorUser() != null && adminUserId.equals(log.getActorUser().getId()))
+				.filter(log -> log.getDetailsJson() != null && log.getDetailsJson().contains("\"source\":\"tickets-csv-import\""))
+				.toList();
+		assertEquals(1, csvCreateLogs.size());
+		assertTrue(csvCreateLogs.getFirst().getDetailsJson().contains("\"projectId\":" + projectId));
 
 		assertTrue(ticketRepository.findAllByProject_IdAndDeletedAtIsNull(projectId).size() >= 2);
 	}

@@ -8,6 +8,7 @@ import com.att.tdp.issueflow.comment.entity.CommentMentionId;
 import com.att.tdp.issueflow.comment.repository.CommentMentionRepository;
 import com.att.tdp.issueflow.comment.repository.CommentRepository;
 import com.att.tdp.issueflow.project.entity.Project;
+import com.att.tdp.issueflow.project.repository.ProjectMemberRepository;
 import com.att.tdp.issueflow.project.repository.ProjectRepository;
 import com.att.tdp.issueflow.ticket.dependency.entity.TicketDependency;
 import com.att.tdp.issueflow.ticket.dependency.entity.TicketDependencyId;
@@ -48,6 +49,9 @@ class PersistenceContractIntegrationTest {
 	private ProjectRepository projectRepository;
 
 	@Autowired
+	private ProjectMemberRepository projectMemberRepository;
+
+	@Autowired
 	private TicketRepository ticketRepository;
 
 	@Autowired
@@ -79,6 +83,7 @@ class PersistenceContractIntegrationTest {
 		ticketDependencyRepository.deleteAll();
 		attachmentRepository.deleteAll();
 		ticketRepository.deleteAll();
+		projectMemberRepository.deleteAllInBatch();
 		projectRepository.deleteAll();
 		revokedTokenRepository.deleteAll();
 		userRepository.deleteAll();
