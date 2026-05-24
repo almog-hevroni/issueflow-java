@@ -26,7 +26,6 @@ class TicketCsvImportAuditIntegrationTest extends ExtendedFeaturesIntegrationTes
 		Long memberId = userRepository.findByUsername("member-csv").orElseThrow().getId();
 		Long adminId = userRepository.findByUsername("admin-csv").orElseThrow().getId();
 		Long projectId = createProject(adminToken, ownerId, "CSV Audit Project");
-		linkProjectMember(projectId, memberId);
 
 		String csvContent = "id,title,description,status,priority,type,assigneeId\n"
 				+ "1,Good One,desc,TODO,LOW,BUG," + memberId + "\n"
@@ -57,5 +56,6 @@ class TicketCsvImportAuditIntegrationTest extends ExtendedFeaturesIntegrationTes
 
 		assertEquals(2, csvCreateLogs.size());
 		assertTrue(csvCreateLogs.stream().allMatch(log -> log.getDetailsJson().contains("\"projectId\":" + projectId)));
+		assertTrue(projectMemberRepository.existsByProject_IdAndUser_Id(projectId, memberId));
 	}
 }

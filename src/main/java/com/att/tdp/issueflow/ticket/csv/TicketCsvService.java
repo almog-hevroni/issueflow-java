@@ -4,6 +4,8 @@ import com.att.tdp.issueflow.audit.AuditService;
 import com.att.tdp.issueflow.audit.enums.AuditAction;
 import com.att.tdp.issueflow.common.exception.BadRequestException;
 import com.att.tdp.issueflow.common.exception.NotFoundException;
+import com.att.tdp.issueflow.project.entity.ProjectMember;
+import com.att.tdp.issueflow.project.entity.ProjectMemberId;
 import com.att.tdp.issueflow.project.repository.ProjectMemberRepository;
 import com.att.tdp.issueflow.project.entity.Project;
 import com.att.tdp.issueflow.project.repository.ProjectRepository;
@@ -162,12 +164,22 @@ public class TicketCsvService {
 			if (assignee.getRole() != Role.DEVELOPER) {
 				throw new BadRequestException("Assignee must have role DEVELOPER");
 			}
-			if (!projectMemberRepository.existsByProject_IdAndUser_Id(project.getId(), assigneeId)) {
-				throw new BadRequestException("Assignee user is not linked to the project: " + assigneeId);
-			}
+			ensureProjectDeveloperMembership(project, assignee);
 			ticket.setAssignee(assignee);
 		}
 		return ticket;
+	}
+
+	private void ensureProjectDeveloperMembership(Project project, User user) {
+		if (projectMemberRepository.existsByProject_IdAndUser_Id(project.getId(), user.getId())) {
+			return;
+		}
+		ProjectMember member = new ProjectMember();
+		member.setId(new ProjectMemberId(project.getId(), user.getId()));
+		member.setProject(project);
+		member.setUser(user);
+		member.setCreatedAt(java.time.Instant.now());
+		projectMemberRepository.save(member);
 	}
 
 	private String requiredField(CSVRecord record, String fieldName) {

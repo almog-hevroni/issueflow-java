@@ -27,10 +27,6 @@ public class AuthUserDetails implements UserDetails {
 		return user.getFullName();
 	}
 
-	public String getRoleName() {
-		return user.getRole().name();
-	}
-
 	public User getUser() {
 		return user;
 	}

@@ -40,18 +40,4 @@ public interface TicketRepository extends JpaRepository<Ticket, Long> {
 			""")
 	List<Ticket> findEscalationCandidates(@Param("now") Instant now,
 										  @Param("doneStatus") TicketStatus doneStatus);
-
-	@Query("""
-			select distinct t.assignee
-			from Ticket t
-			where t.project.id = :projectId
-			  and t.assignee is not null
-			  and t.assignee.role = :role
-			  and t.deletedAt is null
-			order by t.assignee.createdAt asc
-			""")
-	List<com.att.tdp.issueflow.user.entity.User> findDistinctAssigneesByProjectAndRoleOrderByCreatedAtAsc(
-			@Param("projectId") Long projectId,
-			@Param("role") com.att.tdp.issueflow.user.enums.Role role
-	);
 }

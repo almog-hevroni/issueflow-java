@@ -17,6 +17,16 @@ public interface ProjectMemberRepository extends JpaRepository<ProjectMember, Pr
 			select pm.user
 			from ProjectMember pm
 			where pm.project.id = :projectId
+			order by pm.user.createdAt asc, pm.user.id asc
+			""")
+	List<User> findProjectUsersByProjectIdOrderByUserCreatedAtAsc(
+			@Param("projectId") Long projectId
+	);
+
+	@Query("""
+			select pm.user
+			from ProjectMember pm
+			where pm.project.id = :projectId
 			  and pm.user.role = :role
 			order by pm.user.createdAt asc, pm.user.id asc
 			""")

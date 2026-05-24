@@ -7,6 +7,8 @@ import com.att.tdp.issueflow.common.exception.ImmutableTicketException;
 import com.att.tdp.issueflow.common.exception.InvalidStateTransitionException;
 import com.att.tdp.issueflow.common.exception.NotFoundException;
 import com.att.tdp.issueflow.project.dto.ProjectWorkloadResponse;
+import com.att.tdp.issueflow.project.entity.ProjectMember;
+import com.att.tdp.issueflow.project.entity.ProjectMemberId;
 import com.att.tdp.issueflow.project.entity.Project;
 import com.att.tdp.issueflow.project.repository.ProjectMemberRepository;
 import com.att.tdp.issueflow.project.repository.ProjectRepository;
@@ -184,17 +186,21 @@ public class TicketService {
 		if (assignee.getRole() != Role.DEVELOPER) {
 			throw new BadRequestException("Assignee must have role DEVELOPER");
 		}
-		if (projectId != null && !projectMemberRepository.existsByProject_IdAndUser_Id(projectId, assigneeId)) {
-			throw new BadRequestException("Assignee user is not linked to the project: " + assigneeId);
+		if (projectId != null) {
+			ensureProjectDeveloperMembership(projectId, assignee);
 		}
 		return assignee;
 	}
 
 	private User selectAutoAssignee(Long projectId) {
 		return getProjectDeveloperCandidates(projectId).stream()
-				.min((left, right) -> Long.compare(
-						ticketRepository.countOpenAssignedTickets(projectId, left.getId(), TicketStatus.DONE),
-						ticketRepository.countOpenAssignedTickets(projectId, right.getId(), TicketStatus.DONE)))
+				.min(Comparator
+						.comparingLong((User user) -> ticketRepository.countOpenAssignedTickets(
+								projectId,
+								user.getId(),
+								TicketStatus.DONE))
+						.thenComparing(User::getCreatedAt)
+						.thenComparing(User::getId))
 				.orElse(null);
 	}
 
@@ -202,13 +208,37 @@ public class TicketService {
 	public List<ProjectWorkloadResponse> getWorkload(Long projectId) {
 		Project project = projectRepository.findByIdAndDeletedAtIsNull(projectId)
 				.orElseThrow(() -> new NotFoundException("Project not found: " + projectId));
-		return getProjectDeveloperCandidates(project.getId()).stream()
+		return getProjectUsers(project.getId()).stream()
 				.map(user -> new ProjectWorkloadResponse(
 						user.getId(),
 						user.getUsername(),
 						ticketRepository.countOpenAssignedTickets(project.getId(), user.getId(), TicketStatus.DONE)))
 				.sorted(Comparator.comparingLong(ProjectWorkloadResponse::openTicketCount))
 				.toList();
+	}
+
+	private void ensureProjectDeveloperMembership(Long projectId, User user) {
+		if (user.getRole() != Role.DEVELOPER) {
+			throw new BadRequestException("Assignee must have role DEVELOPER");
+		}
+		if (projectMemberRepository.existsByProject_IdAndUser_Id(projectId, user.getId())) {
+			return;
+		}
+		Project project = projectRepository.findByIdAndDeletedAtIsNull(projectId)
+				.orElseThrow(() -> new NotFoundException("Project not found: " + projectId));
+		ProjectMember member = new ProjectMember();
+		member.setId(new ProjectMemberId(projectId, user.getId()));
+		member.setProject(project);
+		member.setUser(user);
+		member.setCreatedAt(Instant.now());
+		projectMemberRepository.save(member);
+	}
+
+	private List<User> getProjectUsers(Long projectId) {
+		if (!projectRepository.existsByIdAndDeletedAtIsNull(projectId)) {
+			throw new NotFoundException("Project not found: " + projectId);
+		}
+		return projectMemberRepository.findProjectUsersByProjectIdOrderByUserCreatedAtAsc(projectId);
 	}
 
 	private List<User> getProjectDeveloperCandidates(Long projectId) {

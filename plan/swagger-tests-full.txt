@@ -1,0 +1,1172 @@
+# IssueFlow Swagger Manual Testing Guide (Full)
+
+This document is based only on the currently implemented code in this repository.
+It is intended for manual end-to-end testing through Swagger UI, including:
+- happy paths
+- edge/negative cases
+- authentication/authorization behavior
+- audit and DB verification
+
+---
+
+## 1) Environment Setup
+
+### 1.1 Start database
+From repo root:
+
+Windows PowerShell:
+docker compose up -d db
+
+Check container:
+docker compose ps
+
+### 1.2 Run application
+From repo root:
+
+Windows PowerShell:
+.\mvnw.cmd spring-boot:run
+
+Optional explicit local profile:
+.\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=local"
+
+### 1.3 Swagger URL
+http://localhost:8080/swagger-ui/index.html
+
+### 1.4 Initial login credentials (seeded by Flyway)
+- username: admin
+- password: Password123!
+
+### 1.5 Login + Swagger Authorize
+1. Open `POST /auth/login`.
+2. Execute with:
+{
+  "username": "admin",
+  "password": "Password123!"
+}
+3. Copy `accessToken` from response.
+4. Click Swagger **Authorize**.
+5. Paste exactly:
+Bearer <ACCESS_TOKEN>
+6. Authorize and close dialog.
+
+Use placeholders consistently while testing:
+- <ACCESS_TOKEN>
+- <ACCESS_TOKEN_DEV>
+- <ADMIN_ID>
+- <DEV1_ID>
+- <DEV2_ID>
+- <PROJECT_ID>
+- <PROJECT2_ID>
+- <TICKET_ID>
+- <TICKET2_ID>
+- <COMMENT_ID>
+- <ATTACHMENT_ID>
+- <DEPENDENCY_TICKET_ID>
+
+---
+
+## 2) Main Testing Order / Flow
+
+Follow this order to avoid missing prerequisites:
+
+1. Login as seeded admin (`POST /auth/login`).
+2. Verify token works (`GET /auth/me`).
+3. Create users (ADMIN + DEVELOPER test users) with `POST /users`.
+4. Create project(s) with `POST /projects`.
+5. Ensure project-linked developers exist (important note):
+   - There is no API endpoint to add project members.
+   - A DEVELOPER project owner is auto-linked on project creation.
+   - For multi-developer workload/auto-assignment tests, add rows to `project_members` via SQL (section 17).
+6. Create tickets (`POST /tickets`) with mixed statuses/priorities/assignees/dueDates.
+7. Run ticket retrieval and update transition tests.
+8. Run comments + mentions tests.
+9. Run dependency tests.
+10. Run attachment tests.
+11. Run CSV export/import tests.
+12. Run soft delete/restore tests for tickets/projects.
+13. Run workload and auto-assignment tests.
+14. Run audit log filter tests.
+15. Run scheduler (auto-escalation) tests (requires waiting for scheduler interval).
+16. Run logout + token revocation + authz negative tests.
+17. Optional SQL verification for all major tables.
+18. Final checklist.
+
+---
+
+## 3) Test Data Setup (Copy/Paste Ready)
+
+## 3.1 Login as seeded admin
+
+Endpoint: `POST /auth/login`
+
+{
+  "username": "admin",
+  "password": "Password123!"
+}
+
+Save:
+- `accessToken` -> <ACCESS_TOKEN>
+
+Then call `GET /auth/me` and save:
+- `id` -> <ADMIN_ID>
+
+## 3.2 Create DEVELOPER users
+
+Endpoint: `POST /users`
+
+Body for DEV1:
+{
+  "username": "dev1",
+  "email": "dev1@example.com",
+  "fullName": "Developer One",
+  "role": "DEVELOPER",
+  "password": "Password123!"
+}
+
+Body for DEV2:
+{
+  "username": "dev2",
+  "email": "dev2@example.com",
+  "fullName": "Developer Two",
+  "role": "DEVELOPER",
+  "password": "Password123!"
+}
+
+Save returned IDs:
+- DEV1 id -> <DEV1_ID>
+- DEV2 id -> <DEV2_ID>
+
+## 3.3 Optional: create extra ADMIN user
+
+Endpoint: `POST /users`
+
+{
+  "username": "admin2",
+  "email": "admin2@example.com",
+  "fullName": "Admin Two",
+  "role": "ADMIN",
+  "password": "Password123!"
+}
+
+## 3.4 Create project
+
+Endpoint: `POST /projects`
+
+Recommended owner: DEV1 so owner is auto-added to project_members.
+
+{
+  "name": "Project Alpha",
+  "description": "Main test project",
+  "ownerId": <DEV1_ID>
+}
+
+Save:
+- `id` -> <PROJECT_ID>
+
+Create second project for cross-project dependency negative test:
+
+{
+  "name": "Project Beta",
+  "description": "Second project for boundary tests",
+  "ownerId": <DEV2_ID>
+}
+
+Save:
+- `id` -> <PROJECT2_ID>
+
+## 3.5 Link DEV2 to project via normal ticket API flow (no manual SQL)
+
+No dedicated project-members endpoint is required for tests.
+To ensure both developers are linked for workload/auto-assign checks, create one ticket
+with explicit `assigneeId = <DEV2_ID>` in `<PROJECT_ID>` (or PATCH an existing ticket to DEV2).
+The application auto-links explicitly assigned developers to the project.
+
+## 3.6 Create tickets with varied status/priority/assignee/dueDate
+
+Ticket A (explicit assignee, future dueDate):
+{
+  "title": "Ticket A",
+  "description": "Assigned to DEV1, due in future",
+  "status": "TODO",
+  "priority": "LOW",
+  "type": "BUG",
+  "projectId": <PROJECT_ID>,
+  "assigneeId": <DEV1_ID>,
+  "dueDate": "2030-01-01T10:00:00Z"
+}
+
+Ticket B (no assignee, should auto-assign if members exist):
+{
+  "title": "Ticket B Auto",
+  "description": "No assignee provided",
+  "status": "TODO",
+  "priority": "MEDIUM",
+  "type": "FEATURE",
+  "projectId": <PROJECT_ID>
+}
+
+Ticket C (past dueDate for escalation tests):
+{
+  "title": "Ticket C Overdue Candidate",
+  "description": "Past due date",
+  "status": "IN_PROGRESS",
+  "priority": "LOW",
+  "type": "TECHNICAL",
+  "projectId": <PROJECT_ID>,
+  "assigneeId": <DEV1_ID>,
+  "dueDate": "2020-01-01T00:00:00Z"
+}
+
+Ticket D (no dueDate):
+{
+  "title": "Ticket D No Due Date",
+  "description": "No due date ticket",
+  "status": "TODO",
+  "priority": "LOW",
+  "type": "BUG",
+  "projectId": <PROJECT_ID>,
+  "assigneeId": <DEV1_ID>
+}
+
+Save important IDs from responses:
+- <TICKET_ID> (use Ticket A first)
+- <TICKET2_ID> (use Ticket B or C as needed)
+- <DEPENDENCY_TICKET_ID> (use dedicated blocker ticket)
+
+## 3.7 Comment with mention
+
+Endpoint: `POST /tickets/{ticketId}/comments`
+
+{
+  "authorId": <DEV1_ID>,
+  "content": "Please review this @dev2"
+}
+
+Save:
+- returned `id` -> <COMMENT_ID>
+
+## 3.8 Dependency setup
+
+Create blocker ticket first (in same project), save as <DEPENDENCY_TICKET_ID>, then:
+
+Endpoint: `POST /tickets/{ticketId}/dependencies`
+
+{
+  "blockedBy": <DEPENDENCY_TICKET_ID>
+}
+
+## 3.9 Attachment setup
+
+Use Swagger file picker on `POST /tickets/{ticketId}/attachments` with:
+- a `.txt` file (valid baseline)
+
+Save:
+- returned `id` -> <ATTACHMENT_ID>
+
+## 3.10 CSV import example files
+
+Valid sample:
+id,title,description,status,priority,type,assigneeId
+1,CSV Ticket One,Imported row 1,TODO,LOW,BUG,<DEV1_ID>
+2,"CSV, Ticket Two","Description with ""quotes""",IN_PROGRESS,MEDIUM,FEATURE,<DEV2_ID>
+
+Invalid enum sample:
+id,title,description,status,priority,type,assigneeId
+1,Bad Enum,Should fail,NOT_A_STATUS,LOW,BUG,<DEV1_ID>
+
+Invalid assignee sample:
+id,title,description,status,priority,type,assigneeId
+1,Bad Assignee,Should fail,TODO,LOW,BUG,999999
+
+---
+
+## 4) Global Endpoint Testing Template
+
+Use this checklist for each endpoint:
+1. Test name
+2. Purpose
+3. Method + path
+4. Authorization required?
+5. Headers
+6. Request body (if any)
+7. Expected status
+8. Key response fields
+9. IDs/tokens to capture
+10. Edge/negative cases and expected error status
+
+Structured errors should generally follow:
+{
+  "timestamp": "...",
+  "status": 400,
+  "error": "Bad Request",
+  "message": "...",
+  "path": "/some/path"
+}
+
+---
+
+## 5) Authentication Endpoints
+
+### 5.1 POST /auth/login
+- Purpose: obtain JWT token.
+- Auth required: No.
+- Headers: `Content-Type: application/json`
+
+Happy path body:
+{
+  "username": "admin",
+  "password": "Password123!"
+}
+
+Expected: `200`
+Important fields:
+- `accessToken`
+- `tokenType` = `Bearer`
+- `expiresIn` (default 3600)
+
+Copy:
+- `accessToken` -> <ACCESS_TOKEN>
+
+Negative body (wrong password):
+{
+  "username": "admin",
+  "password": "WrongPassword!"
+}
+Expected: `401`
+
+Negative body (missing username):
+{
+  "password": "Password123!"
+}
+Expected: `400`
+
+### 5.2 POST /auth/logout
+- Purpose: revoke current token.
+- Auth required: Yes.
+- Headers: `Authorization: Bearer <ACCESS_TOKEN>`
+- Body: none
+- Expected: `200`
+
+Negative:
+- Missing Authorization header -> `401` (security layer)
+- Malformed Authorization header on logout (for example `Token abc`) -> `400` with message like `Authorization header must be Bearer token`
+
+### 5.3 GET /auth/me
+- Purpose: verify authenticated principal.
+- Auth required: Yes.
+- Headers: `Authorization: Bearer <ACCESS_TOKEN>`
+- Expected: `200`
+- Important fields: `id`, `username`, `email`, `fullName`, `role`
+
+Copy:
+- Admin `id` -> <ADMIN_ID>
+
+Negative:
+- No token -> `401`
+- Malformed token -> `401`
+- Revoked token (after logout) -> `401`
+
+---
+
+## 6) User Endpoints
+
+### 6.1 GET /users
+- Auth required: Yes
+- Expected: `200` with array of user objects
+
+### 6.2 GET /users/{userId}
+- Auth required: Yes
+- Expected: `200` for existing, `404` for non-existing
+
+### 6.3 POST /users
+- Auth required: Yes
+- Body shape:
+{
+  "username": "string (max 100)",
+  "email": "valid email",
+  "fullName": "string (max 255)",
+  "role": "ADMIN or DEVELOPER",
+  "password": "optional, 8-255 if provided"
+}
+
+Happy path example:
+{
+  "username": "dev3",
+  "email": "dev3@example.com",
+  "fullName": "Developer Three",
+  "role": "DEVELOPER",
+  "password": "Password123!"
+}
+Expected: `200`
+Copy: returned `id`
+
+Duplicate username/email:
+- expected `409`
+
+Invalid role:
+{
+  "username": "badrole",
+  "email": "badrole@example.com",
+  "fullName": "Bad Role",
+  "role": "MANAGER",
+  "password": "Password123!"
+}
+Expected: `400` (invalid role message)
+
+### 6.4 POST /users/update/{userId}
+- Auth required: Yes
+- Body:
+{
+  "fullName": "Updated Name",
+  "role": "ADMIN"
+}
+- Expected: `200`
+
+Negative:
+- non-existing user -> `404`
+- invalid role -> `400`
+
+### 6.5 DELETE /users/{userId}
+- Auth required: Yes
+- Expected: `200`
+- Then `GET /users/{userId}` should return `404`
+
+---
+
+## 7) Project Endpoints
+
+### 7.1 GET /projects
+- Auth required: Yes
+- Expected: `200`
+
+### 7.2 GET /projects/{projectId}
+- Auth required: Yes
+- Expected: `200` or `404`
+
+### 7.3 POST /projects
+- Auth required: Yes
+- Body:
+{
+  "name": "Project Alpha",
+  "description": "Main test project",
+  "ownerId": <DEV1_ID>
+}
+- Expected: `200`
+- Copy returned `id` -> <PROJECT_ID>
+
+Negative invalid owner:
+{
+  "name": "Invalid Owner Project",
+  "description": "should fail",
+  "ownerId": 999999
+}
+Expected: `404`
+
+### 7.4 PATCH /projects/{projectId}
+- Auth required: Yes
+- Body:
+{
+  "name": "Project Alpha Updated",
+  "description": "Updated description"
+}
+- Expected: `200`
+
+Negative:
+- empty body `{}` -> `400` (`At least one updatable field is required`)
+
+### 7.5 DELETE /projects/{projectId}
+- Auth required: Yes
+- Expected: `200` (soft delete)
+- Then `GET /projects/{projectId}` -> `404`
+
+### 7.6 GET /projects/deleted (ADMIN only)
+- Auth required: Yes
+- Expected as ADMIN: `200`
+- Expected as DEVELOPER: `403`
+
+### 7.7 POST /projects/{projectId}/restore (ADMIN only)
+- Auth required: Yes
+- Expected as ADMIN: `200`
+- Expected as DEVELOPER: `403`
+
+Negative:
+- restore non-deleted project -> `400`
+
+### 7.8 GET /projects/{projectId}/workload
+- Auth required: Yes
+- Expected: `200` with array of `{ userId, username, openTicketCount }`
+- Notes:
+  - only DEVELOPER users linked in `project_members`
+  - excludes ADMIN users
+  - excludes developers not linked to this project
+
+---
+
+## 8) Ticket Endpoints
+
+### 8.1 GET /tickets?projectId={projectId}
+- Auth required: Yes
+- Expected: `200`
+- Negative invalid/missing project -> `404`/`400` depending input
+
+### 8.2 GET /tickets/{ticketId}
+- Auth required: Yes
+- Expected: `200` or `404`
+
+### 8.3 POST /tickets
+- Auth required: Yes
+
+Body example with explicit assignee:
+{
+  "title": "API Ticket Explicit",
+  "description": "Assigned explicitly",
+  "status": "TODO",
+  "priority": "LOW",
+  "type": "BUG",
+  "projectId": <PROJECT_ID>,
+  "assigneeId": <DEV1_ID>,
+  "dueDate": "2030-01-01T10:00:00Z"
+}
+
+Body example without assignee (auto-assignment path):
+{
+  "title": "API Ticket Auto",
+  "description": "No assignee field",
+  "status": "TODO",
+  "priority": "MEDIUM",
+  "type": "FEATURE",
+  "projectId": <PROJECT_ID>
+}
+
+Expected: `200`
+Important fields:
+- `id`
+- `assigneeId` (may be null if no linked DEVELOPER exists)
+- `isOverdue` initially false
+
+Negative:
+- assignee is ADMIN -> `400`
+- assignee DEVELOPER not linked to project -> `400`
+- project not found -> `404`
+
+### 8.4 PATCH /tickets/{ticketId}
+- Auth required: Yes
+- Body can include any subset of:
+{
+  "title": "New title",
+  "description": "New description",
+  "status": "IN_PROGRESS",
+  "priority": "HIGH",
+  "assigneeId": <DEV2_ID>,
+  "dueDate": "2030-01-03T00:00:00Z"
+}
+
+Expected: `200`
+
+Status transition rules to test:
+1. TODO -> IN_PROGRESS (valid, `200`)
+2. IN_PROGRESS -> IN_REVIEW (valid, `200`)
+3. IN_REVIEW -> DONE (valid if dependencies resolved, `200`)
+4. TODO -> DONE (invalid skip, `400`)
+5. IN_REVIEW -> TODO (invalid backward, `400`)
+6. DONE ticket any update (immutable) -> `400`
+
+Other negatives:
+- empty body `{}` -> `400`
+- assignee ADMIN -> `400`
+- assignee not linked DEVELOPER -> `400`
+
+### 8.5 DELETE /tickets/{ticketId}
+- Auth required: Yes
+- Expected: `200` (soft delete)
+- After delete, `GET /tickets/{ticketId}` -> `404`
+
+### 8.6 GET /tickets/deleted?projectId={projectId} (ADMIN only)
+- Auth required: Yes
+- ADMIN: `200`
+- DEVELOPER: `403`
+
+### 8.7 POST /tickets/{ticketId}/restore (ADMIN only)
+- Auth required: Yes
+- ADMIN: `200`
+- DEVELOPER: `403`
+
+Negative:
+- restore non-deleted ticket -> `400`
+
+---
+
+## 9) Comment + Mention Endpoints
+
+### 9.1 GET /tickets/{ticketId}/comments
+- Auth required: Yes
+- Expected: `200` array
+
+### 9.2 POST /tickets/{ticketId}/comments
+- Auth required: Yes
+- Body:
+{
+  "authorId": <DEV1_ID>,
+  "content": "Please check this @dev2"
+}
+- Expected: `200`
+- Verify `mentionedUsers` includes DEV2
+- Save `id` -> <COMMENT_ID>
+
+Mention case-insensitivity test:
+{
+  "authorId": <DEV1_ID>,
+  "content": "Ping @DEV2 and @Dev2"
+}
+Expected: `200`; mention should resolve once to `dev2`.
+
+Mention non-existing username test:
+{
+  "authorId": <DEV1_ID>,
+  "content": "Hello @noSuchUser123"
+}
+Expected: `200`; `mentionedUsers` should not include unknown user.
+
+### 9.3 PATCH /tickets/{ticketId}/comments/{commentId}
+- Auth required: Yes
+- Body:
+{
+  "content": "Updated comment with @dev1"
+}
+- Expected: `200`
+- Verify mention list recalculated (old mentions removed, new mentions added)
+
+### 9.4 DELETE /tickets/{ticketId}/comments/{commentId}
+- Auth required: Yes
+- Expected: `200`
+
+### 9.5 GET /users/{userId}/mentions
+- Auth required: Yes
+- Expected: `200`
+- Default pagination behavior:
+  - default `page=1`
+  - default `pageSize=50`
+
+Try with params:
+- `page=1&pageSize=1`
+
+Negative:
+- page < 1 -> `400`
+- pageSize < 1 -> `400`
+- user not found -> `404`
+
+---
+
+## 10) Dependency Endpoints
+
+### 10.1 POST /tickets/{ticketId}/dependencies
+- Auth required: Yes
+- Body:
+{
+  "blockedBy": <DEPENDENCY_TICKET_ID>
+}
+- Expected: `200`
+
+Negative tests:
+1. Self dependency (`blockedBy` same ticketId) -> `400`
+2. Cross-project dependency -> `400`
+3. Duplicate dependency -> `400`
+4. Ticket/blocker not found -> `404`
+
+### 10.2 GET /tickets/{ticketId}/dependencies
+- Auth required: Yes
+- Expected: `200`
+- Verify dependency appears with blocker `id/title/status`
+
+### 10.3 DELETE /tickets/{ticketId}/dependencies/{blockerId}
+- Auth required: Yes
+- Expected: `200`
+- If relation missing -> `404`
+
+### 10.4 DONE with unresolved blockers
+1. Ensure target ticket has blocker not DONE.
+2. PATCH ticket status to DONE:
+{
+  "status": "DONE"
+}
+Expected: `400` with dependency-unresolved message.
+
+3. Move blocker through valid flow to DONE.
+4. Retry PATCH to DONE on target.
+Expected: `200`.
+
+---
+
+## 11) Attachment Endpoints
+
+### 11.1 POST /tickets/{ticketId}/attachments
+- Auth required: Yes
+- Multipart form-data: `file`
+- Allowed content types:
+  - image/png
+  - image/jpeg
+  - application/pdf
+  - text/plain
+- Max size: 10MB
+
+Happy path:
+- upload `.txt` -> `200`
+- optionally upload `.png`, `.jpg`, `.pdf` -> each should be `200`
+
+Copy:
+- returned `id` -> <ATTACHMENT_ID>
+
+Negative:
+1. Unsupported content type (example `.json` with `application/json`) -> `400`
+2. File > 10MB -> `400`
+3. Empty file -> `400`
+4. Ticket not found -> `404`
+
+### 11.2 DELETE /tickets/{ticketId}/attachments/{attachmentId}
+- Auth required: Yes
+- Expected: `200`
+- Wrong/non-existing attachment -> `404`
+- Attachment from another ticket path -> `404`
+
+Note: No implemented endpoint for list/download attachments in current code.
+
+---
+
+## 12) CSV Endpoints
+
+### 12.1 GET /tickets/export?projectId={projectId}
+- Auth required: Yes
+- Expected: `200`
+- Response content-type: `text/csv`
+- Verify header fields:
+  id,title,description,status,priority,type,assigneeId
+- Verify values are present and properly quoted for commas/quotes.
+
+### 12.2 POST /tickets/import (multipart/form-data)
+- Auth required: Yes
+- Form fields:
+  - `file` (CSV)
+  - `projectId` (Long)
+
+Expected response shape:
+{
+  "created": <number>,
+  "failed": <number>,
+  "errors": [ "...row error..." ]
+}
+
+Happy file:
+id,title,description,status,priority,type,assigneeId
+1,Imported A,Desc A,TODO,LOW,BUG,<DEV1_ID>
+2,Imported B,Desc B,IN_PROGRESS,MEDIUM,FEATURE,<DEV2_ID>
+
+Expected: created increments, failed 0.
+
+Quotes/commas file:
+id,title,description,status,priority,type,assigneeId
+1,"Imported, Ticket","quoted ""text""",TODO,LOW,BUG,<DEV1_ID>
+
+Expected: `200`, successful parse.
+
+Invalid enum file:
+id,title,description,status,priority,type,assigneeId
+1,Bad Enum,Desc,NOT_A_STATUS,LOW,BUG,<DEV1_ID>
+
+Expected: `200` overall, row counted as failed, error entry includes invalid status.
+
+Invalid assignee file:
+id,title,description,status,priority,type,assigneeId
+1,Bad Assignee,Desc,TODO,LOW,BUG,999999
+
+Expected: row failure with not found/invalid assignee message.
+
+Important audit behavior:
+- Audit CREATE log is written only for each successfully imported row.
+- Failed rows do not create CREATE audit for ticket.
+
+---
+
+## 13) Audit Log Endpoint
+
+### 13.1 GET /audit-logs
+- Auth required: Yes
+- Query params (optional):
+  - entityType (String)
+  - entityId (Long)
+  - action (enum):
+    CREATE, UPDATE, DELETE, RESTORE, AUTO_ASSIGN, AUTO_ESCALATE, LOGIN, LOGOUT
+  - actor (enum):
+    USER, SYSTEM
+
+Base call:
+- `GET /audit-logs` -> `200` list
+
+Filter examples:
+- `/audit-logs?entityType=TICKET`
+- `/audit-logs?entityType=TICKET&entityId=<TICKET_ID>`
+- `/audit-logs?action=CREATE`
+- `/audit-logs?actor=SYSTEM`
+- combined:
+  `/audit-logs?entityType=TICKET&entityId=<TICKET_ID>&action=CREATE&actor=USER`
+
+Verify audit appears after:
+- user/project/ticket/comment create/update/delete
+- ticket/project restore
+- auth login/logout
+- auto-assignment (SYSTEM + AUTO_ASSIGN)
+- auto-escalation (SYSTEM + AUTO_ESCALATE)
+- csv import successful rows (source tickets-csv-import in detailsJson)
+
+---
+
+## 14) Security Tests (Detailed)
+
+### 14.1 Valid login
+- `POST /auth/login` with correct credentials -> `200`
+
+### 14.2 Invalid password
+- `POST /auth/login` wrong password -> `401`
+
+### 14.3 Protected endpoint without token
+- `GET /users` without Authorization -> `401`
+
+### 14.4 Protected endpoint with malformed token
+- `GET /users` with `Authorization: Bearer not-a-jwt` -> `401`
+
+### 14.5 Revoked token after logout
+1. login -> get token
+2. call `POST /auth/logout` with token -> `200`
+3. call `GET /auth/me` with same token -> `401`
+
+### 14.6 ADMIN-only endpoint with DEVELOPER token
+1. login as DEVELOPER -> <ACCESS_TOKEN_DEV>
+2. call `GET /projects/deleted` -> `403`
+3. call `GET /tickets/deleted?projectId=<PROJECT_ID>` -> `403`
+4. call restore endpoints as developer -> `403`
+
+### 14.7 Verify structured errors
+For 401/403/400 endpoints, verify JSON fields:
+- timestamp
+- status
+- error
+- message
+- path
+
+---
+
+## 15) Required User Tests
+
+1. Get all users -> `GET /users` -> `200`
+2. Get user by ID -> `GET /users/{userId}` -> `200`
+3. Create user -> `POST /users` -> `200`
+4. Duplicate username/email -> `POST /users` -> `409`
+5. Invalid role -> `POST /users` -> `400`
+6. Update user -> `POST /users/update/{userId}` -> `200`
+7. Delete user -> `DELETE /users/{userId}` -> `200`
+8. Fetch deleted/non-existing -> `GET /users/{userId}` -> `404`
+
+---
+
+## 16) Required Project Tests
+
+1. Get all projects -> `GET /projects` -> `200`
+2. Get project by ID -> `GET /projects/{projectId}` -> `200`
+3. Create project -> `POST /projects` -> `200`
+4. Update project -> `PATCH /projects/{projectId}` -> `200`
+5. Soft-delete project -> `DELETE /projects/{projectId}` -> `200`
+6. List deleted as ADMIN -> `GET /projects/deleted` -> `200`
+7. Restore as ADMIN -> `POST /projects/{projectId}/restore` -> `200`
+8. Try list/restore as DEVELOPER -> `403`
+9. Invalid ownerId on create -> `404`
+
+---
+
+## 17) Required Ticket Tests
+
+1. Create with explicit assignee -> `POST /tickets` -> `200`
+2. Create without assignee -> verify auto-assignment or null when no linked DEVELOPER
+3. Create when no linked DEVELOPER exists -> `assigneeId` should be null
+4. Get by project -> `GET /tickets?projectId=...` -> `200`
+5. Get by ID -> `GET /tickets/{ticketId}` -> `200`
+6. Valid forward status transition one step -> `200`
+7. Invalid backward transition -> `400`
+8. Invalid skip transition -> `400`
+9. Update DONE ticket -> `400`
+10. Assign non-DEVELOPER user -> `400`
+11. Assign DEVELOPER not linked to project -> `400`
+12. Soft-delete ticket -> `DELETE /tickets/{ticketId}` -> `200`
+13. List deleted as ADMIN -> `GET /tickets/deleted?projectId=...` -> `200`
+14. Restore as ADMIN -> `POST /tickets/{ticketId}/restore` -> `200`
+
+---
+
+## 18) Workload / Auto-Assignment Tests
+
+Prerequisite:
+- Multiple DEVELOPER users linked to same project in `project_members`.
+- Because no API exists for linking members, insert rows via SQL.
+
+### 18.1 Workload scope tests
+1. `GET /projects/{projectId}/workload`
+2. Verify only linked DEVELOPER users are returned.
+3. Verify ADMIN users are not returned.
+4. Verify DEVELOPER users not linked to this project are not returned.
+
+### 18.2 Auto-assignment least loaded
+1. Ensure DEV1 has more open tickets than DEV2.
+2. Create new ticket without `assigneeId`.
+3. Verify assigned to least-loaded linked DEVELOPER.
+
+### 18.3 Tie-break rule
+If linked developers have same open count, assignment should prefer oldest registered developer (`created_at` earlier).
+
+### 18.4 No candidates
+If project has zero linked DEVELOPER members, create ticket without `assigneeId` and verify response has:
+- `assigneeId: null`
+
+---
+
+## 19) Comments / Mentions Required Tests
+
+1. Add comment -> `POST /tickets/{ticketId}/comments` -> `200`
+2. Add with @username -> verify `mentionedUsers` contains user
+3. Mentions are case-insensitive (`@dev2`, `@DEV2`)
+4. Update comment -> mention list recalculated
+5. Delete comment -> `200`
+6. `GET /users/{userId}/mentions` returns comment list for mentioned user
+7. Mention non-existing user -> comment still creates, unknown mention ignored
+
+---
+
+## 20) Dependencies Required Tests
+
+1. Add dependency -> `POST /tickets/{ticketId}/dependencies` -> `200`
+2. List dependencies -> `GET /tickets/{ticketId}/dependencies` -> `200`
+3. Remove dependency -> `DELETE /tickets/{ticketId}/dependencies/{blockerId}` -> `200`
+4. Self-dependency -> `400`
+5. Cross-project dependency -> `400`
+6. Set blocked ticket to DONE while blocker unresolved -> `400`
+7. Set blocker to DONE then set dependent to DONE -> `200`
+
+---
+
+## 21) Attachments Required Tests
+
+1. Upload valid `text/plain` -> `200`
+2. Upload valid `image/png` -> `200`
+3. Upload valid `image/jpeg` -> `200`
+4. Upload valid `application/pdf` -> `200`
+5. Unsupported type (example `application/json`) -> `400`
+6. File > 10MB -> `400`
+7. Delete attachment -> `200`
+8. Delete non-existing attachment -> `404`
+
+---
+
+## 22) CSV Import/Export Required Tests
+
+1. Export tickets -> `GET /tickets/export?projectId=<PROJECT_ID>` -> `200`
+2. Verify CSV fields:
+   id,title,description,status,priority,type,assigneeId
+3. Import valid CSV -> created > 0, failed 0
+4. Import CSV with commas/quotes -> successful row parsing
+5. Import CSV with invalid enum -> row failure, errors contains row message
+6. Import CSV with invalid assigneeId -> row failure
+7. Verify summary fields:
+   - created
+   - failed
+   - errors[]
+8. Verify audit CREATE logs only for successfully imported rows
+
+---
+
+## 23) Auto-Escalation Scheduler Tests
+
+Scheduler is not directly triggerable via Swagger. It runs automatically every 60 seconds by default.
+
+### 23.1 Setup
+Create multiple tickets with past dueDate in non-DONE statuses:
+- LOW
+- MEDIUM
+- HIGH
+- CRITICAL
+
+Also create:
+- future dueDate ticket
+- no dueDate ticket
+- DONE ticket with past dueDate
+
+Example body:
+{
+  "title": "Escalation Candidate LOW",
+  "description": "scheduler test",
+  "status": "IN_PROGRESS",
+  "priority": "LOW",
+  "type": "BUG",
+  "projectId": <PROJECT_ID>,
+  "assigneeId": <DEV1_ID>,
+  "dueDate": "2020-01-01T00:00:00Z"
+}
+
+### 23.2 Execution steps
+1. Create tickets.
+2. Wait at least one scheduler cycle (~60s).
+3. Re-fetch each ticket via `GET /tickets/{ticketId}`.
+4. Verify priority promotion:
+   - LOW -> MEDIUM
+   - MEDIUM -> HIGH
+   - HIGH -> CRITICAL
+   - CRITICAL stays CRITICAL
+5. Verify `isOverdue` behavior:
+   - escalated priorities keep/return `isOverdue=false` until CRITICAL ticket gets another cycle where overdue toggles true
+   - CRITICAL overdue candidate eventually `isOverdue=true`
+6. Verify future dueDate ticket does not change.
+7. Verify ticket without dueDate does not change.
+8. Verify DONE ticket does not change.
+9. Verify audit log created with:
+   - action = AUTO_ESCALATE
+   - actor = SYSTEM
+
+---
+
+## 24) Database Verification SQL (Optional but Recommended)
+
+Use these queries in PostgreSQL to confirm persisted state.
+
+### 24.1 users
+select id, username, email, full_name, role, created_at
+from users
+order by id;
+
+### 24.2 projects
+select id, name, owner_id, deleted_at, created_at
+from projects
+order by id;
+
+### 24.3 project_members
+select project_id, user_id, created_at
+from project_members
+order by project_id, user_id;
+
+### 24.4 tickets
+select id, project_id, title, status, priority, type, assignee_id, due_date, is_overdue, deleted_at
+from tickets
+order by id;
+
+### 24.5 comments
+select id, ticket_id, author_id, content, created_at
+from comments
+order by id;
+
+### 24.6 comment_mentions
+select comment_id, mentioned_user_id, created_at
+from comment_mentions
+order by comment_id, mentioned_user_id;
+
+### 24.7 ticket_dependencies
+select ticket_id, blocked_by_ticket_id, created_at
+from ticket_dependencies
+order by ticket_id, blocked_by_ticket_id;
+
+### 24.8 attachments
+select id, ticket_id, uploaded_by_id, file_name, content_type, size_bytes, storage_path, created_at
+from attachments
+order by id;
+
+### 24.9 audit_logs
+select id, actor_type, actor_user_id, action, entity_type, entity_id, details_json, created_at
+from audit_logs
+order by id desc;
+
+### 24.10 revoked_tokens
+select id, jti, expires_at, revoked_at
+from revoked_tokens
+order by id desc;
+
+---
+
+## 25) Full Endpoint Matrix (Implemented Endpoints Only)
+
+Authentication:
+- POST /auth/login
+- POST /auth/logout
+- GET /auth/me
+
+Users:
+- GET /users
+- GET /users/{userId}
+- GET /users/{userId}/mentions
+- POST /users
+- POST /users/update/{userId}
+- DELETE /users/{userId}
+
+Projects:
+- GET /projects
+- GET /projects/deleted (ADMIN)
+- GET /projects/{projectId}
+- POST /projects
+- PATCH /projects/{projectId}
+- DELETE /projects/{projectId}
+- GET /projects/{projectId}/workload
+- POST /projects/{projectId}/restore (ADMIN)
+
+Tickets:
+- GET /tickets?projectId=...
+- GET /tickets/{ticketId}
+- GET /tickets/deleted?projectId=... (ADMIN)
+- GET /tickets/export?projectId=...
+- POST /tickets/import (multipart)
+- POST /tickets
+- PATCH /tickets/{ticketId}
+- DELETE /tickets/{ticketId}
+- POST /tickets/{ticketId}/restore (ADMIN)
+
+Comments:
+- GET /tickets/{ticketId}/comments
+- POST /tickets/{ticketId}/comments
+- PATCH /tickets/{ticketId}/comments/{commentId}
+- DELETE /tickets/{ticketId}/comments/{commentId}
+
+Dependencies:
+- POST /tickets/{ticketId}/dependencies
+- GET /tickets/{ticketId}/dependencies
+- DELETE /tickets/{ticketId}/dependencies/{blockerId}
+
+Attachments:
+- POST /tickets/{ticketId}/attachments (multipart)
+- DELETE /tickets/{ticketId}/attachments/{attachmentId}
+
+Audit:
+- GET /audit-logs
+
+---
+
+## 26) Final Checklist
+
+Mark each item when complete:
+
+[ ] Swagger opens and app is running at `http://localhost:8080/swagger-ui/index.html`
+[ ] Login works with seeded admin
+[ ] Swagger Authorize works with `Bearer <ACCESS_TOKEN>`
+[ ] All auth endpoints tested (login/logout/me)
+[ ] Unauthorized and malformed token cases tested
+[ ] Revoked token behavior tested after logout
+[ ] User endpoints tested (happy + duplicate + invalid role + delete/not found)
+[ ] Project endpoints tested (CRUD + soft delete + restore + ADMIN-only guards)
+[ ] Ticket endpoints tested (CRUD + transitions + assignee rules + soft delete/restore)
+[ ] Workload endpoint tested
+[ ] Auto-assignment tested (least-load + tie-break + null when no candidates)
+[ ] Comments tested
+[ ] Mentions tested (case-insensitive + recalculation + mentions endpoint)
+[ ] Dependencies tested (self/cross-project/progress blocking)
+[ ] Attachments tested (valid formats + invalid type + >10MB + delete)
+[ ] CSV export tested
+[ ] CSV import tested (valid + quotes/commas + invalid enum + invalid assignee)
+[ ] CSV summary (`created/failed/errors`) verified
+[ ] Audit logs tested with all major filters
+[ ] Audit records verified for create/update/delete/restore/login/logout
+[ ] SYSTEM audit verified for AUTO_ASSIGN/AUTO_ESCALATE
+[ ] Scheduler behavior verified after waiting cycle(s)
+[ ] Optional DB SQL verification completed
+[ ] Manual Swagger testing completed
+
