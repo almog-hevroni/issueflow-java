@@ -93,6 +93,10 @@ erDiagram
     TICKETS ||--o{ TICKET_DEPENDENCIES : "blocker ticket side (one-to-many)"
 ```
 
+## Diagram Image
+
+![Database relationship diagram](./database%20diagram.png)
+
 ## Relationship Types and Explanations
 
 - **`users` -> `projects` (one-to-many):** one user can own many projects; each project has exactly one owner (`projects.owner_id`).
